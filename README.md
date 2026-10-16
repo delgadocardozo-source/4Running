@@ -1,4 +1,4 @@
-# PACE/01 — v1.3
+# PACE/01 — v1.4.0
 
 A lightweight, mobile-first PWA for interval-based beginner running training.
 
