@@ -335,6 +335,13 @@
     if (active) active.hidden = !hasStarted;
     const onTrain = $('#view-train')?.classList.contains('is-active');
     document.body.classList.toggle('is-running', Boolean(running && onTrain));
+    if (running) {
+      const more = $('#morePanel');
+      if (more && !more.hidden) {
+        more.hidden = true;
+        $('#moreToggle')?.setAttribute('aria-expanded', 'false');
+      }
+    }
 
     const live = $('#timerLive');
     if (live) {
@@ -832,9 +839,12 @@
         ? (s.notes || (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : ''))
         : (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : '');
       const decision = historyDecision(s);
+      const mark = decision.cls
+        ? `<span class="history-mark ${decision.cls}" aria-hidden="true">${decision.cls === 'advance' ? '✓' : decision.cls === 'repeat' ? '↻' : decision.cls === 'recovery' ? 'R' : '×'}</span>`
+        : '';
       return `
         <article class="history-item">
-          <div class="history-kicker"><strong>${day} ${month} ${date.getFullYear()}</strong></div>
+          <div class="history-kicker"><strong>${day} ${month} ${date.getFullYear()}</strong>${mark}</div>
           <div class="history-kind">${escapeHtml(kind)}</div>
           ${bits.length ? `<p class="history-facts">${escapeHtml(bits.join(' · '))}</p>` : ''}
           ${cont ? `<p class="history-facts">${escapeHtml(cont)}</p>` : ''}
