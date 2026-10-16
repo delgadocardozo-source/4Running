@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f6f7f3" />
+  <meta name="description" content="PACE/01 — entrenador de running minimalista con intervalos, historial y preparación para carrera." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="PACE/01" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <title>PACE/01</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" data-nav="home" aria-label="Ir al inicio">
+        <span class="brand-mark">P/01</span>
+        <span class="brand-copy">PACE/01</span>
+      </button>
+      <div class="topbar-actions">
+        <span class="date-pill" id="todayLabel">Hoy</span>
+        <button class="icon-button" id="installButton" aria-label="Instalar PACE/01" title="Instalar app" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="app" tabindex="-1">
+      <section class="view is-active" id="view-home" data-view="home">
+        <div class="hero-grid">
+          <article class="hero-card card" id="coachingCard">
+            <div class="eyebrow" id="coachEyebrow">HOY</div>
+            <div class="hero-title-row">
+              <div>
+                <h1 id="coachTitle">Sesión</h1>
+                <p id="coachSubtitle">Cargando plan…</p>
+              </div>
+              <span class="status-chip" id="coachChip">—</span>
+            </div>
+            <p class="coach-body" id="coachBody"></p>
+
+            <div class="workout-prescription" id="homePrescription">
+              <div class="prescription-step warm">
+                <span class="step-label">Calentar</span>
+                <strong id="homeWarmTime">5:00</strong>
+                <span id="homeWalkSpeed">5,0 km/h</span>
+              </div>
+              <div class="prescription-repeat">
+                <div class="prescription-step run">
+                  <span class="step-label">Correr</span>
+                  <strong id="homeRunTime">2:00</strong>
+                  <span id="homeRunSpeed">7,5 km/h</span>
+                </div>
+                <div class="repeat-badge" id="homeReps">× 7</div>
+                <div class="prescription-step walk">
+                  <span class="step-label">Caminar</span>
+                  <strong id="homeWalkTime">2:00</strong>
+                  <span id="homeWalkSpeedRepeat">5,0 km/h</span>
+                </div>
+              </div>
+              <div class="prescription-step cool">
+                <span class="step-label">Enfriar</span>
+                <strong id="homeCoolTime">5:00</strong>
+                <span id="homeCoolSpeed">4,5 km/h</span>
+              </div>
+            </div>
+
+            <div class="rest-panel card-inset" id="homeRestPanel" hidden>
+              <strong>Día de recuperación</strong>
+              <p id="homeRestNote">Cuenta como sesión válida del plan.</p>
+            </div>
+
+            <p class="schedule-note" id="scheduleNote" hidden></p>
+
+            <div class="hero-actions">
+              <button class="primary-button" id="startWorkoutHome">Iniciar entrenamiento</button>
+              <button class="secondary-button" id="previewWorkout">Ver bloques</button>
+              <button class="secondary-button" id="markRestDone" hidden>Registrar recuperación</button>
+              <button class="text-button" id="rescheduleSession">Reprogramar</button>
+              <button class="text-button" id="skipSession">Omitir</button>
+            </div>
+          </article>
+
+          <aside class="race-card card">
+            <div class="eyebrow">CARRERA · 01 NOV</div>
+            <div class="race-countdown">
+              <strong id="daysToRace">18</strong>
+              <span>días</span>
+            </div>
+            <h2 id="readinessHeadline">2K o 5K</h2>
+            <p id="readinessSummary">Decidimos por evidencia, no por entusiasmo.</p>
+            <div class="readiness-status">
+              <span class="distance-badge" id="readinessBadge">Aún no</span>
+              <span class="distance-badge accent" id="readinessTarget">foco 2K</span>
+              <span class="distance-badge conf" id="readinessConfidence">Confianza baja</span>
+            </div>
+            <ul class="reason-list" id="readinessReasons"></ul>
+            <div class="decision-date">Checkpoint: <strong id="checkpointLabel">25 oct</strong> · <span id="checkpointCountdown"></span></div>
+          </aside>
+        </div>
+
+        <section class="section-block">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">SECUENCIA</span>
+              <h2>Progresión por sesiones hechas</h2>
+            </div>
+            <button class="text-button" data-nav="history">Ver historial</button>
+          </div>
+          <div class="sequence-bar card" id="sequenceBar"></div>
+          <p class="helper-text" id="sequenceHelp">La semana agrupa; si omitís una sesión, el plan sigue.</p>
+        </section>
+      </section>
+
+      <section class="view" id="view-train" data-view="train">
+        <div class="training-header">
+          <div>
+            <span class="eyebrow" id="trainEyebrow">SESIÓN</span>
+            <h1 id="trainTitle">Intervalos</h1>
+            <p id="trainMeta">—</p>
+          </div>
+          <button class="secondary-button compact" id="editSpeeds">Velocidades</button>
+        </div>
+
+        <article class="timer-card card" id="timerCard">
+          <div class="timer-topline">
+            <span class="phase-pill" id="phasePill">PREPARADO</span>
+            <span class="block-counter" id="blockCounter">Bloque 1</span>
+          </div>
+          <p id="timerLive" class="sr-only" aria-live="polite"></p>
+
+          <div class="timer-stage">
+            <div class="timer-ring" id="timerRing" style="--progress: 0deg">
+              <div class="timer-ring-inner">
+                <span class="timer-phase" id="timerPhase">CALENTAR</span>
+                <strong class="timer-value" id="timerValue">05:00</strong>
+                <span class="timer-speed" id="timerSpeed">5,0 km/h</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="next-block" id="nextBlock">
+            <span>Después</span>
+            <strong>CORRER · 2:00</strong>
+            <span>7,5 km/h</span>
+          </div>
+
+          <div class="timer-controls">
+            <button class="round-button secondary" id="prevBlock" aria-label="Bloque anterior">↶</button>
+            <button class="start-button" id="mainTimerButton">INICIAR</button>
+            <button class="round-button secondary" id="nextBlockButton" aria-label="Siguiente bloque">↷</button>
+          </div>
+
+          <div class="timer-secondary-controls">
+            <button class="ghost-button" id="plusThirty">+30 s</button>
+            <button class="ghost-button" id="resetTimer">Reiniciar</button>
+            <button class="ghost-button" id="toggleAudio" aria-pressed="true">Sonido</button>
+            <button class="ghost-button" id="toggleVoice" aria-pressed="true">Voz</button>
+            <button class="ghost-button" id="keepAwake" aria-pressed="false">Pantalla activa</button>
+          </div>
+
+          <div class="elapsed-row">
+            <div><span>Total</span><strong id="totalElapsed">00:00</strong></div>
+            <div><span>Restante</span><strong id="totalRemaining">38:00</strong></div>
+            <div><span>Estimado</span><strong id="estimatedDistance">3,71 km</strong></div>
+          </div>
+        </article>
+
+        <section class="block-list-section">
+          <div class="section-heading inline">
+            <div>
+              <span class="eyebrow">GUION DE SESIÓN</span>
+              <h2>Todos los bloques</h2>
+            </div>
+          </div>
+          <div class="block-list" id="blockList"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-history" data-view="history">
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow">HISTORIAL</span>
+            <h1>Tu progreso, sin ruido.</h1>
+            <p>Tiempo continuo objetivo, esfuerzo y molestias.</p>
+          </div>
+          <button class="primary-button compact" id="addSession">+ Registro</button>
+        </div>
+        <div class="history-summary metric-grid">
+          <article class="metric-card card">
+            <span class="metric-label">Registros</span>
+            <strong id="historyCount">0</strong>
+            <small>carrera + recuperación</small>
+          </article>
+          <article class="metric-card card">
+            <span class="metric-label">Mejor continuo</span>
+            <strong id="bestContinuous">—</strong>
+            <small>bloque run medido</small>
+          </article>
+          <article class="metric-card card">
+            <span class="metric-label">Mejor distancia</span>
+            <strong id="bestDistance">—</strong>
+            <small>hasta ahora</small>
+          </article>
+          <article class="metric-card card" id="historyTrend">
+            <span class="metric-label">Tendencia</span>
+            <strong class="metric-status">—</strong>
+            <small>—</small>
+          </article>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </section>
+
+      <section class="view" id="view-settings" data-view="settings">
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow">AJUSTES</span>
+            <h1>Referencias de cinta y alertas.</h1>
+            <p>La velocidad se ajusta acá; el plan no sube velocidad y duración a la vez.</p>
+          </div>
+        </div>
+        <form class="settings-card card" id="settingsForm">
+          <div class="settings-section">
+            <h2>Velocidades de cinta</h2>
+            <div class="form-grid three">
+              <label>Caminar
+                <div class="input-unit"><input type="number" step="0.1" min="1" max="10" id="walkSpeed" value="5.0"><span>km/h</span></div>
+              </label>
+              <label>Correr
+                <div class="input-unit"><input type="number" step="0.1" min="3" max="20" id="runSpeed" value="7.5"><span>km/h</span></div>
+              </label>
+              <label>Enfriar
+                <div class="input-unit"><input type="number" step="0.1" min="1" max="10" id="coolSpeed" value="4.5"><span>km/h</span></div>
+              </label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h2>Alertas</h2>
+            <label class="toggle-row"><span><strong>Cuenta regresiva</strong><small>5 segundos antes de cambiar de bloque.</small></span><input type="checkbox" id="countdownToggle" checked></label>
+            <label class="toggle-row"><span><strong>Instrucción por voz</strong><small>“Correr”, “Caminar”, “Enfriar”.</small></span><input type="checkbox" id="voiceToggle" checked></label>
+            <label class="toggle-row"><span><strong>Sonidos</strong><small>Tonos distintos para carrera y recuperación.</small></span><input type="checkbox" id="soundToggle" checked></label>
+          </div>
+          <div class="settings-actions">
+            <button class="primary-button" type="submit">Guardar ajustes</button>
+            <button class="secondary-button" type="button" id="exportHistory">Exportar JSON</button>
+          </div>
+        </form>
+        <article class="card limitation-card">
+          <div class="eyebrow">IPHONE / PWA</div>
+          <h2>Usá la app con pantalla activa durante el entrenamiento.</h2>
+          <p>PACE/01 no puede garantizar alarmas si iOS suspende la PWA con pantalla bloqueada. Activá sonido, voz y “Pantalla activa”.</p>
+        </article>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navegación principal">
+      <button class="nav-item is-active" data-nav="home"><span>⌂</span><em>Inicio</em></button>
+      <button class="nav-item" data-nav="train"><span>▶</span><em>Entrenar</em></button>
+      <button class="nav-item" data-nav="history"><span>◫</span><em>Historial</em></button>
+      <button class="nav-item" data-nav="settings"><span>⚙</span><em>Ajustes</em></button>
+    </nav>
+  </div>
+
+  <dialog id="sessionDialog" class="modal">
+    <form method="dialog" class="modal-card" id="sessionForm">
+      <div class="modal-heading">
+        <div>
+          <span class="eyebrow">CIERRE DE SESIÓN</span>
+          <h2>¿Cómo salió?</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+      </div>
+
+      <input type="hidden" id="sessionPlanId" value="" />
+      <input type="hidden" id="sessionMaxRunBlockSec" value="" />
+      <input type="hidden" id="sessionFromTimer" value="0" />
+
+      <div class="form-grid two">
+        <label>Fecha<input type="date" id="sessionDate" required></label>
+        <label>Tipo
+          <select id="sessionType">
+            <option value="Cinta">Cinta</option>
+            <option value="Exterior">Exterior</option>
+          </select>
+        </label>
+        <label>Tiempo<input type="text" id="sessionTime" placeholder="32:58" required></label>
+        <label>Distancia
+          <div class="input-unit">
+            <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
+            <span>km</span>
+          </div>
+          <small class="field-hint" id="distanceHint">Si viene del timer de cinta, arranca como estimada hasta que la confirmes.</small>
+        </label>
+      </div>
+
+      <div class="distance-confirm-row" id="distanceConfirmRow">
+        <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
+        <button type="button" class="secondary-button compact" id="confirmDistanceBtn">Confirmar distancia real</button>
+      </div>
+      <input type="checkbox" id="sessionDistanceEstimated" hidden checked>
+
+      <div class="close-metric" id="maxRunBlockDisplay">
+        <span class="metric-label">Máx. bloque continuo (medido)</span>
+        <strong id="sessionMaxRunBlockLabel">—</strong>
+        <small>Mayor tramo de carrera sin caminar. No inventamos capacidad extra.</small>
+      </div>
+
+      <label class="toggle-row compact-toggle">
+        <span><strong>Completé la prescripción</strong><small>Todos los bloques correr/caminar indicados. No depende de la distancia GPS.</small></span>
+        <input type="checkbox" id="sessionPrescriptionCompleted" checked>
+      </label>
+
+      <fieldset class="choice-fieldset">
+        <legend>Esfuerzo (RPE) *</legend>
+        <div class="choice-row" id="rpeChoices">
+          <label><input type="radio" name="sessionRpe" value="3" required> 3</label>
+          <label><input type="radio" name="sessionRpe" value="4"> 4</label>
+          <label><input type="radio" name="sessionRpe" value="5"> 5</label>
+          <label><input type="radio" name="sessionRpe" value="6"> 6</label>
+          <label><input type="radio" name="sessionRpe" value="7"> 7</label>
+          <label><input type="radio" name="sessionRpe" value="8"> 8</label>
+        </div>
+      </fieldset>
+
+      <fieldset class="choice-fieldset">
+        <legend>¿Molestia o dolor? *</legend>
+        <div class="choice-row">
+          <label><input type="radio" name="sessionPain" value="no" id="painNo" required checked> No</label>
+          <label><input type="radio" name="sessionPain" value="yes" id="painYes"> Sí</label>
+        </div>
+      </fieldset>
+
+      <div id="painDetails" class="pain-details" hidden>
+        <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Lumbar / pantorrilla / rodilla…"></label>
+        <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="1" max="5" step="1" placeholder="2"></label>
+        <fieldset class="choice-fieldset">
+          <legend>¿Pasó algo de esto?</legend>
+          <label class="check-row"><input type="checkbox" id="flagWorsening"> Fue empeorando durante la sesión</label>
+          <label class="check-row"><input type="checkbox" id="flagAlteredGait"> Alteró la marcha / forma de correr</label>
+          <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
+          <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito, persistente o síntomas neurológicos</label>
+        </fieldset>
+        <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
+      </div>
+
+      <fieldset class="choice-fieldset">
+        <legend>¿Sentías que podías seguir corriendo? (opcional)</legend>
+        <div class="choice-row wrap">
+          <label><input type="radio" name="couldContinue" value="no"> No</label>
+          <label><input type="radio" name="couldContinue" value="2-5"> 2–5 min más</label>
+          <label><input type="radio" name="couldContinue" value="5plus"> &gt;5 min más</label>
+        </div>
+      </fieldset>
+
+      <label>Notas (opcional)<textarea id="sessionNotes" rows="2" placeholder="Sensaciones, clima, cinta…"></textarea></label>
+
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" data-close-dialog>Cancelar</button>
+        <button class="primary-button" type="submit" id="saveSession">Confirmar y guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="speedDialog" class="modal">
+    <form method="dialog" class="modal-card" id="speedForm">
+      <div class="modal-heading">
+        <div>
+          <span class="eyebrow">ESTA SESIÓN</span>
+          <h2>Ajustar velocidades</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+      </div>
+      <div class="form-grid three">
+        <label>Caminar<div class="input-unit"><input type="number" id="sessionWalkSpeed" step="0.1"><span>km/h</span></div></label>
+        <label>Correr<div class="input-unit"><input type="number" id="sessionRunSpeed" step="0.1"><span>km/h</span></div></label>
+        <label>Enfriar<div class="input-unit"><input type="number" id="sessionCoolSpeed" step="0.1"><span>km/h</span></div></label>
+      </div>
+      <p class="helper-text">No cambia la estructura del plan. La progresión de duración va por el plan; la velocidad la controlás vos.</p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" data-close-dialog>Cancelar</button>
+        <button class="primary-button" type="submit" id="saveSpeeds">Aplicar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="coach-engine.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
