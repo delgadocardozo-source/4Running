@@ -274,6 +274,19 @@
     return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
   }
 
+  /**
+   * Días de calendario en hora local. No usa la hora del día:
+   * del 16 oct al 1 nov son 16, aunque falten horas para la medianoche.
+   */
+  function calendarDaysUntil(isoDate, from = new Date()) {
+    if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return null;
+    const [y, m, d] = String(isoDate).split('-').map(Number);
+    const target = new Date(y, m - 1, d);
+    const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    if (Number.isNaN(target.getTime()) || Number.isNaN(start.getTime())) return null;
+    return Math.round((target.getTime() - start.getTime()) / 86400000);
+  }
+
   function describeStructure(structure) {
     if (!structure || structure.rest) return 'Recuperación';
     return `${formatBlock(structure.runSeconds)} correr / ${formatBlock(structure.walkSeconds)} caminar ×${structure.reps}`;
@@ -287,6 +300,7 @@
   function validTrainingAttempts(logs = [], plan = null) {
     const fromLogs = (logs || [])
       .filter(l => l.type !== 'Recuperación' && l.source !== 'rest')
+      .filter(l => l.source !== 'external')
       .filter(l => l.execution !== 'skipped')
       .filter(l => l.kind !== 'recovery-gate')
       .map(l => ({
@@ -420,6 +434,66 @@
     return recentTrendFavorable(priorLogs, plan).ok;
   }
 
+  /**
+   * Lectura de tendencia para la persona, sin la fórmula del motor.
+   * Favorable solo si recentTrendFavorable.ok. Si no, precaución o estable.
+   */
+  function summarizeTrend(logs = [], plan = null) {
+    try {
+      const valid = validTrainingAttempts(logs, plan).slice(0, 3);
+      const trend = recentTrendFavorable(logs, plan);
+      const completed = valid.filter(a => a.prescriptionCompleted && a.execution === 'completed');
+      const pain = valid.filter(a => a.pain || a.worseningDuringRun || a.alteredGait || a.forcedStop || a.severeWarning).length;
+      const rpes = completed.map(a => Number(a.rpe)).filter(n => Number.isFinite(n));
+      const highRpe = rpes.some(r => r >= 7);
+      const compliance = `${completed.length}/${valid.length || 0}`;
+
+      if (valid.length < 2) {
+        return {
+          tone: 'estable',
+          glyph: '→',
+          headline: 'Estable',
+          detail: 'Todavía hay pocas sesiones para leer una tendencia.'
+        };
+      }
+
+      if (trend.ok) {
+        return {
+          tone: 'favorable',
+          glyph: '↗',
+          headline: 'Favorable',
+          detail: `Últimas ${valid.length} sesiones: RPE estable · sin dolor relevante · cumplimiento ${compliance}`
+        };
+      }
+
+      const caution = pain > 0 || highRpe || /deterioro|alerta|empeora/i.test(trend.reason || '');
+      if (caution) {
+        const signal = pain > 0 ? 'hay molestia' : highRpe ? 'RPE alto' : 'conviene no apurar';
+        return {
+          tone: 'precaucion',
+          glyph: '↘',
+          headline: 'Precaución',
+          detail: `Últimas ${valid.length} sesiones: ${signal} · cumplimiento ${compliance}`
+        };
+      }
+
+      return {
+        tone: 'estable',
+        glyph: '→',
+        headline: 'Estable',
+        detail: `Últimas ${valid.length} sesiones: RPE en rango · cumplimiento ${compliance}`
+      };
+    } catch (error) {
+      console.error('[pace01] summarizeTrend', error);
+      return {
+        tone: 'estable',
+        glyph: '→',
+        headline: 'Estable',
+        detail: 'No se pudo leer la tendencia de las últimas sesiones.'
+      };
+    }
+  }
+
   function readinessConfidence(logs) {
     const runs = validTrainingAttempts(logs);
     const completed = runs.filter(a => a.prescriptionCompleted && a.execution === 'completed');
@@ -514,9 +588,7 @@
 
     const targetLevel = level5k === 'listo' ? 'listo' : level2k === 'listo' ? 'listo' : (level5k === 'cerca' || level2k === 'cerca') ? 'cerca' : 'aun_no';
     const focusTarget = level5k === 'listo' || level5k === 'cerca' ? '5K' : '2K';
-    const today = new Date();
-    const checkpoint = new Date(`${plan.checkpointDate}T12:00:00`);
-    const daysToCheckpoint = Math.ceil((checkpoint - today) / 86400000);
+    const daysToCheckpoint = calendarDaysUntil(plan.checkpointDate, new Date());
 
     return {
       level: targetLevel,
@@ -942,14 +1014,65 @@
     const focusView = getFocusSession(plan);
     const focus = getUnderlyingPlanItem(plan, focusView);
     if (!focus) return { plan, message: 'Nada para reprogramar.' };
+    const previousDate = focus.scheduledDate || null;
     focus.scheduledDate = scheduledDate;
     focus.status = 'rescheduled';
     focus.blockedUntilRest = false;
+    console.info('[pace01] reschedule', { id: focus.id, previousDate, scheduledDate });
     return {
       plan,
+      previousDate,
+      scheduledDate,
+      title: focus.title,
       message: `Misma sesión reprogramada al ${scheduledDate}. El plan no avanzó.`,
       next: focus
     };
+  }
+
+  /**
+   * Día sin correr elegido por la persona, con una sesión de intervalos todavía abierta.
+   * Registra recuperación y no cierra el PlanItem ni avanza la secuencia.
+   */
+  function registerVoluntaryRecovery(plan, logs, localDate) {
+    try {
+      const focusView = getFocusSession(plan);
+      const item = getUnderlyingPlanItem(plan, focusView);
+      const log = {
+        id: `rest-vol-${Date.now()}`,
+        date: localDate,
+        type: 'Recuperación',
+        planSessionId: item && item.kind === 'run' ? item.id : null,
+        time: null,
+        distanceKm: null,
+        distanceEstimated: false,
+        maxRunBlockSec: null,
+        couldContinue: null,
+        rpe: null,
+        pain: false,
+        painLocation: '',
+        painIntensity: null,
+        worseningDuringRun: false,
+        alteredGait: false,
+        forcedStop: false,
+        severeWarning: false,
+        execution: 'completed',
+        progression: null,
+        notes: 'Día de recuperación voluntario. La sesión del plan sigue pendiente.',
+        source: 'rest',
+        voluntary: true
+      };
+      logs.push(log);
+      console.info('[pace01] voluntary-recovery', { planSessionId: log.planSessionId, date: localDate });
+      return {
+        plan,
+        logs,
+        log,
+        message: 'Día de recuperación registrado. Es la misma sesión: tu progreso no avanzó.'
+      };
+    } catch (error) {
+      console.error('[pace01] voluntary-recovery', error);
+      return { plan, logs, message: 'No se pudo registrar la recuperación.' };
+    }
   }
 
   function planStats(plan) {
@@ -977,15 +1100,18 @@
     sortedPlanSessions,
     describeStructure,
     formatBlock,
+    calendarDaysUntil,
     assessRaceReadiness,
     recentTrendOk,
     recentTrendFavorable,
+    summarizeTrend,
     validTrainingAttempts,
     decideProgression,
     decideSafety,
     buildDayCoaching,
     confirmNextSession,
     markRestComplete,
+    registerVoluntaryRecovery,
     skipFocus,
     rescheduleFocus,
     planStats,

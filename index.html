@@ -31,64 +31,53 @@
 
     <main id="app" tabindex="-1">
       <section class="view is-active" id="view-home" data-view="home">
-        <div class="hero-grid">
-          <article class="hero-card card" id="coachingCard">
+        <div class="home-column">
+          <article class="today-card card" id="coachingCard">
             <div class="eyebrow" id="coachEyebrow">HOY</div>
-            <div class="hero-title-row">
-              <div>
-                <h1 id="coachTitle">Sesión</h1>
-                <p id="coachSubtitle">Cargando plan…</p>
-              </div>
-              <span class="status-chip" id="coachChip">—</span>
-            </div>
-            <p class="coach-body" id="coachBody"></p>
 
-            <div class="workout-prescription" id="homePrescription">
-              <div class="prescription-step warm">
-                <span class="step-label">Calentar</span>
-                <strong id="homeWarmTime">5:00</strong>
-                <span id="homeWalkSpeed">5,0 km/h</span>
-              </div>
-              <div class="prescription-repeat">
-                <div class="prescription-step run">
-                  <span class="step-label">Correr</span>
-                  <strong id="homeRunTime">2:00</strong>
-                  <span id="homeRunSpeed">7,5 km/h</span>
-                </div>
-                <div class="repeat-badge" id="homeReps">× 7</div>
-                <div class="prescription-step walk">
-                  <span class="step-label">Caminar</span>
-                  <strong id="homeWalkTime">2:00</strong>
-                  <span id="homeWalkSpeedRepeat">5,0 km/h</span>
-                </div>
-              </div>
-              <div class="prescription-step cool">
-                <span class="step-label">Enfriar</span>
-                <strong id="homeCoolTime">5:00</strong>
-                <span id="homeCoolSpeed">4,5 km/h</span>
-              </div>
+            <div id="todayRun">
+              <h1 id="coachTitle">Intervalos</h1>
+              <p class="today-meta" id="coachMeta">—</p>
+              <ul class="today-script" id="homeScript">
+                <li id="homeWarmLine">5 min calentamiento</li>
+                <li id="homeWorkLine">7× · 2 min correr / 2 min caminar</li>
+                <li id="homeCoolLine">5 min enfriamiento</li>
+              </ul>
+              <p class="schedule-note" id="scheduleNote" hidden></p>
+              <button class="primary-button today-start" id="startWorkoutHome">Iniciar entrenamiento</button>
+              <button class="text-button today-preview" id="previewWorkout">Ver bloques</button>
             </div>
 
-            <div class="rest-panel card-inset" id="homeRestPanel" hidden>
-              <strong>Día de recuperación</strong>
-              <p id="homeRestNote">Cuenta como sesión válida del plan.</p>
+            <div id="todayRest" hidden>
+              <h1 id="restTitle">Recuperación</h1>
+              <p class="today-meta" id="restMeta">Hoy el plan pide no correr.</p>
+              <p class="rest-copy" id="homeRestNote"></p>
+              <button class="primary-button today-start" id="markRestPlan" type="button">Registrar día de recuperación</button>
+              <p class="helper-text">Conserva el historial de este intento. El plan decidirá cuándo repetir o continuar según tus síntomas y sesiones anteriores.</p>
             </div>
 
-            <p class="schedule-note" id="scheduleNote" hidden></p>
-
-            <div class="hero-actions">
-              <button class="primary-button" id="startWorkoutHome">Iniciar entrenamiento</button>
-              <button class="secondary-button" id="previewWorkout">Ver bloques</button>
-              <button class="secondary-button" id="markRestDone" hidden>Registrar recuperación</button>
-              <button class="text-button" id="rescheduleSession">Reprogramar</button>
-              <button class="text-button" id="skipSession">Omitir</button>
+            <div id="todayDone" hidden>
+              <h1>Plan al día</h1>
+              <p class="today-meta">No hay sesión pendiente.</p>
             </div>
           </article>
+
+          <section class="below-fold" id="homeSecondary">
+            <div class="recovery-offer card" id="recoveryOffer">
+              <p class="recovery-question">¿Hoy no estás en condiciones de correr?</p>
+              <button class="secondary-button" id="markRestVoluntary" type="button">Registrar recuperación</button>
+              <p class="helper-text">Conserva el historial de este intento. El plan decidirá cuándo repetir o continuar según tus síntomas y sesiones anteriores.</p>
+            </div>
+            <div class="quiet-actions" id="quietActions">
+              <button class="text-button" id="rescheduleSession" type="button">Reprogramar</button>
+              <button class="text-button" id="skipSession" type="button">Omitir</button>
+            </div>
+          </section>
 
           <aside class="race-card card">
             <div class="eyebrow">CARRERA · 01 NOV</div>
             <div class="race-countdown">
-              <strong id="daysToRace">18</strong>
+              <strong id="daysToRace">—</strong>
               <span>días</span>
             </div>
             <h2 id="readinessHeadline">2K o 5K</h2>
@@ -98,22 +87,22 @@
               <span class="distance-badge accent" id="readinessTarget">foco 2K</span>
               <span class="distance-badge conf" id="readinessConfidence">Confianza baja</span>
             </div>
-            <ul class="reason-list" id="readinessReasons"></ul>
+            <p class="evidence-need" id="evidenceNeed">Para evaluar 5K necesitamos: 2–3 sesiones consistentes · RPE controlado · sin dolor relevante · mejorar tiempo continuo.</p>
             <div class="decision-date">Checkpoint: <strong id="checkpointLabel">25 oct</strong> · <span id="checkpointCountdown"></span></div>
           </aside>
-        </div>
 
-        <section class="section-block">
-          <div class="section-heading">
-            <div>
-              <span class="eyebrow">SECUENCIA</span>
-              <h2>Progresión por sesiones hechas</h2>
+          <section class="section-block">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">SECUENCIA</span>
+                <h2>Progresión por sesiones hechas</h2>
+              </div>
+              <button class="text-button" data-nav="history" type="button">Ver historial</button>
             </div>
-            <button class="text-button" data-nav="history">Ver historial</button>
-          </div>
-          <div class="sequence-bar card" id="sequenceBar"></div>
-          <p class="helper-text" id="sequenceHelp">La semana agrupa; si omitís una sesión, el plan sigue.</p>
-        </section>
+            <div class="sequence-bar card" id="sequenceBar"></div>
+            <p class="helper-text" id="sequenceHelp">La semana agrupa; si omitís una sesión, el plan sigue.</p>
+          </section>
+        </div>
       </section>
 
       <section class="view" id="view-train" data-view="train">
@@ -127,9 +116,20 @@
         </div>
 
         <article class="timer-card card" id="timerCard">
+          <div class="prep-panel" id="prepPanel">
+            <div class="eyebrow">PREPARAR ENTRENAMIENTO</div>
+            <ul class="prep-list">
+              <li><button type="button" class="prep-toggle" id="prepSound">🔊 Sonido <strong id="prepSoundState">listo</strong></button></li>
+              <li><button type="button" class="prep-toggle" id="prepVoice">🗣 Voz <strong id="prepVoiceState">lista</strong></button></li>
+              <li><button type="button" class="prep-toggle" id="prepWake">☀️ Pantalla activa <strong id="prepWakeState">apagada</strong></button></li>
+            </ul>
+            <button type="button" class="secondary-button" id="testAlerts">Probar alertas</button>
+            <p class="helper-text">Si el iPhone está en silencio o iOS suspende la app con la pantalla bloqueada, las alertas no se escuchan. Probalas antes de salir.</p>
+          </div>
+
           <div class="timer-topline">
             <span class="phase-pill" id="phasePill">PREPARADO</span>
-            <span class="block-counter" id="blockCounter">Bloque 1</span>
+            <span class="block-counter" id="blockCounter">Bloque 1 / 17</span>
           </div>
           <p id="timerLive" class="sr-only" aria-live="polite"></p>
 
@@ -143,24 +143,27 @@
             </div>
           </div>
 
-          <div class="next-block" id="nextBlock">
-            <span>Después</span>
-            <strong>CORRER · 2:00</strong>
-            <span>7,5 km/h</span>
-          </div>
+          <p class="next-block" id="nextBlock">Después → CORRER 2:00</p>
+          <p class="extra-note" id="blockExtraNote" hidden></p>
 
           <div class="timer-controls">
-            <button class="round-button secondary" id="prevBlock" aria-label="Bloque anterior">↶</button>
-            <button class="start-button" id="mainTimerButton">INICIAR</button>
-            <button class="round-button secondary" id="nextBlockButton" aria-label="Siguiente bloque">↷</button>
+            <button class="round-button secondary" id="prevBlock" type="button">
+              <span aria-hidden="true">↶</span>
+              <small>Anterior</small>
+            </button>
+            <button class="start-button" id="mainTimerButton" type="button">INICIAR</button>
+            <button class="round-button secondary" id="nextBlockButton" type="button">
+              <span aria-hidden="true">↷</span>
+              <small>Siguiente</small>
+            </button>
           </div>
 
           <div class="timer-secondary-controls">
-            <button class="ghost-button" id="plusThirty">+30 s</button>
-            <button class="ghost-button" id="resetTimer">Reiniciar</button>
-            <button class="ghost-button" id="toggleAudio" aria-pressed="true">Sonido</button>
-            <button class="ghost-button" id="toggleVoice" aria-pressed="true">Voz</button>
-            <button class="ghost-button" id="keepAwake" aria-pressed="false">Pantalla activa</button>
+            <button class="ghost-button" id="plusThirty" type="button">+30 s en este bloque</button>
+            <button class="ghost-button" id="resetTimer" type="button">Reiniciar</button>
+            <button class="ghost-button" id="toggleAudio" type="button" aria-pressed="true">Sonido</button>
+            <button class="ghost-button" id="toggleVoice" type="button" aria-pressed="true">Voz</button>
+            <button class="ghost-button" id="keepAwake" type="button" aria-pressed="false">Pantalla activa</button>
           </div>
 
           <div class="elapsed-row">
@@ -188,7 +191,7 @@
             <h1>Tu progreso, sin ruido.</h1>
             <p>Tiempo continuo objetivo, esfuerzo y molestias.</p>
           </div>
-          <button class="primary-button compact" id="addSession">+ Registro</button>
+          <button class="primary-button compact" id="addSession" type="button">Actividad externa</button>
         </div>
         <div class="history-summary metric-grid">
           <article class="metric-card card">
@@ -223,19 +226,20 @@
             <p>La velocidad se ajusta acá; el plan no sube velocidad y duración a la vez.</p>
           </div>
         </div>
-        <form class="settings-card card" id="settingsForm">
+        <form class="settings-card card" id="settingsForm" novalidate>
           <div class="settings-section">
             <h2>Velocidades de cinta</h2>
             <div class="form-grid three">
               <label>Caminar
-                <div class="input-unit"><input type="number" step="0.1" min="1" max="10" id="walkSpeed" value="5.0"><span>km/h</span></div>
+                <div class="input-unit"><input type="number" step="0.1" min="3" max="8" id="walkSpeed" value="5.0" inputmode="decimal"><span>km/h</span></div>
               </label>
               <label>Correr
-                <div class="input-unit"><input type="number" step="0.1" min="3" max="20" id="runSpeed" value="7.5"><span>km/h</span></div>
+                <div class="input-unit"><input type="number" step="0.1" min="5" max="16" id="runSpeed" value="7.5" inputmode="decimal"><span>km/h</span></div>
               </label>
               <label>Enfriar
-                <div class="input-unit"><input type="number" step="0.1" min="1" max="10" id="coolSpeed" value="4.5"><span>km/h</span></div>
+                <div class="input-unit"><input type="number" step="0.1" min="3" max="8" id="coolSpeed" value="4.5" inputmode="decimal"><span>km/h</span></div>
               </label>
+              <p class="helper-text">Caminar y enfriar: 3–8 km/h. Correr: 5–16 km/h. Un decimal mal puesto no puede dejar la cinta en 75 km/h.</p>
             </div>
           </div>
           <div class="settings-section">
@@ -246,9 +250,16 @@
           </div>
           <div class="settings-actions">
             <button class="primary-button" type="submit">Guardar ajustes</button>
-            <button class="secondary-button" type="button" id="exportHistory">Exportar JSON</button>
+            <button class="secondary-button" type="button" id="exportHistory">Exportar mis datos</button>
+            <button class="secondary-button" type="button" id="restoreHistory">Restaurar datos</button>
+            <input type="file" id="restoreFile" accept="application/json,.json" hidden>
           </div>
         </form>
+        <article class="card limitation-card">
+          <div class="eyebrow">TUS DATOS</div>
+          <h2>Quedan en este dispositivo.</h2>
+          <p>Si cambiás de iPhone, borrás datos de Safari, reinstalás la app o abrís PACE/01 en otro aparato, este historial no viaja solo. Exportá una copia y restaurala donde la necesites. Todavía no hay cuenta.</p>
+        </article>
         <article class="card limitation-card">
           <div class="eyebrow">IPHONE / PWA</div>
           <h2>Usá la app con pantalla activa durante el entrenamiento.</h2>
@@ -258,8 +269,7 @@
     </main>
 
     <nav class="bottom-nav" aria-label="Navegación principal">
-      <button class="nav-item is-active" data-nav="home"><span>⌂</span><em>Inicio</em></button>
-      <button class="nav-item" data-nav="train"><span>▶</span><em>Entrenar</em></button>
+      <button class="nav-item is-active" data-nav="home"><span>⌂</span><em>Hoy</em></button>
       <button class="nav-item" data-nav="history"><span>◫</span><em>Historial</em></button>
       <button class="nav-item" data-nav="settings"><span>⚙</span><em>Ajustes</em></button>
     </nav>
@@ -269,104 +279,121 @@
     <form method="dialog" class="modal-card" id="sessionForm">
       <div class="modal-heading">
         <div>
-          <span class="eyebrow">CIERRE DE SESIÓN</span>
-          <h2>¿Cómo salió?</h2>
+          <span class="eyebrow" id="closeEyebrow">CIERRE</span>
+          <h2 id="closeTitle">Resultado</h2>
         </div>
         <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
       </div>
+      <div class="step-dots" id="closeSteps" aria-hidden="true">
+        <span data-step-dot="1">Resultado</span>
+        <span data-step-dot="2">RPE</span>
+        <span data-step-dot="3">Molestias</span>
+        <span data-step-dot="4">Datos</span>
+      </div>
+      <p class="close-context" id="closeContext" hidden>Actividad externa. No completa una sesión del plan.</p>
 
       <input type="hidden" id="sessionPlanId" value="" />
       <input type="hidden" id="sessionMaxRunBlockSec" value="" />
+      <input type="hidden" id="sessionExtraSec" value="0" />
       <input type="hidden" id="sessionFromTimer" value="0" />
-
-      <div class="form-grid two">
-        <label>Fecha<input type="date" id="sessionDate" required></label>
-        <label>Tipo
-          <select id="sessionType">
-            <option value="Cinta">Cinta</option>
-            <option value="Exterior">Exterior</option>
-          </select>
-        </label>
-        <label>Tiempo<input type="text" id="sessionTime" placeholder="32:58" required></label>
-        <label>Distancia
-          <div class="input-unit">
-            <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
-            <span>km</span>
-          </div>
-          <small class="field-hint" id="distanceHint">Si viene del timer de cinta, arranca como estimada hasta que la confirmes.</small>
-        </label>
-      </div>
-
-      <div class="distance-confirm-row" id="distanceConfirmRow">
-        <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
-        <button type="button" class="secondary-button compact" id="confirmDistanceBtn">Confirmar distancia real</button>
-      </div>
+      <input type="hidden" id="sessionExternal" value="0" />
+      <input type="checkbox" id="sessionPrescriptionCompleted" hidden>
       <input type="checkbox" id="sessionDistanceEstimated" hidden checked>
 
-      <div class="close-metric" id="maxRunBlockDisplay">
-        <span class="metric-label">Máx. bloque continuo (medido)</span>
-        <strong id="sessionMaxRunBlockLabel">—</strong>
-        <small>Mayor tramo de carrera sin caminar. No inventamos capacidad extra.</small>
-      </div>
+      <section data-close-step="1">
+        <p class="step-question" id="resultQuestion">¿Terminaste todos los bloques?</p>
+        <div class="choice-row choice-large">
+          <label><input type="radio" name="prescriptionDone" value="yes"> Sí</label>
+          <label><input type="radio" name="prescriptionDone" value="no"> No</label>
+        </div>
+      </section>
 
-      <label class="toggle-row compact-toggle">
-        <span><strong>Completé la prescripción</strong><small>Todos los bloques correr/caminar indicados. No depende de la distancia GPS.</small></span>
-        <input type="checkbox" id="sessionPrescriptionCompleted" checked>
-      </label>
-
-      <fieldset class="choice-fieldset">
-        <legend>Esfuerzo (RPE) *</legend>
-        <div class="choice-row" id="rpeChoices">
-          <label><input type="radio" name="sessionRpe" value="3" required> 3</label>
+      <section data-close-step="2" hidden>
+        <p class="step-question">¿Qué tan exigente fue? RPE 1–10</p>
+        <div class="choice-row rpe-grid" id="rpeChoices">
+          <label><input type="radio" name="sessionRpe" value="1"> 1</label>
+          <label><input type="radio" name="sessionRpe" value="2"> 2</label>
+          <label><input type="radio" name="sessionRpe" value="3"> 3</label>
           <label><input type="radio" name="sessionRpe" value="4"> 4</label>
           <label><input type="radio" name="sessionRpe" value="5"> 5</label>
           <label><input type="radio" name="sessionRpe" value="6"> 6</label>
           <label><input type="radio" name="sessionRpe" value="7"> 7</label>
           <label><input type="radio" name="sessionRpe" value="8"> 8</label>
+          <label><input type="radio" name="sessionRpe" value="9"> 9</label>
+          <label><input type="radio" name="sessionRpe" value="10"> 10</label>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset class="choice-fieldset">
-        <legend>¿Molestia o dolor? *</legend>
-        <div class="choice-row">
-          <label><input type="radio" name="sessionPain" value="no" id="painNo" required checked> No</label>
+      <section data-close-step="3" hidden>
+        <p class="step-question">¿Tuviste dolor o molestia?</p>
+        <div class="choice-row choice-large">
+          <label><input type="radio" name="sessionPain" value="no" id="painNo"> No</label>
           <label><input type="radio" name="sessionPain" value="yes" id="painYes"> Sí</label>
         </div>
-      </fieldset>
-
-      <div id="painDetails" class="pain-details" hidden>
-        <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Lumbar / pantorrilla / rodilla…"></label>
-        <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="1" max="5" step="1" placeholder="2"></label>
-        <fieldset class="choice-fieldset">
-          <legend>¿Pasó algo de esto?</legend>
-          <label class="check-row"><input type="checkbox" id="flagWorsening"> Fue empeorando durante la sesión</label>
-          <label class="check-row"><input type="checkbox" id="flagAlteredGait"> Alteró la marcha / forma de correr</label>
-          <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
-          <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito, persistente o síntomas neurológicos</label>
-        </fieldset>
-        <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
-      </div>
-
-      <fieldset class="choice-fieldset">
-        <legend>¿Sentías que podías seguir corriendo? (opcional)</legend>
-        <div class="choice-row wrap">
-          <label><input type="radio" name="couldContinue" value="no"> No</label>
-          <label><input type="radio" name="couldContinue" value="2-5"> 2–5 min más</label>
-          <label><input type="radio" name="couldContinue" value="5plus"> &gt;5 min más</label>
+        <div id="painDetails" class="pain-details" hidden>
+          <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Lumbar / pantorrilla / rodilla…"></label>
+          <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="1" max="5" step="1" placeholder="2"></label>
+          <fieldset class="choice-fieldset">
+            <legend>¿Pasó algo de esto?</legend>
+            <label class="check-row"><input type="checkbox" id="flagWorsening"> Fue empeorando durante la sesión</label>
+            <label class="check-row"><input type="checkbox" id="flagAlteredGait"> Alteró la marcha / forma de correr</label>
+            <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
+            <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito, persistente o síntomas neurológicos</label>
+          </fieldset>
+          <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
         </div>
-      </fieldset>
+      </section>
 
-      <label>Notas (opcional)<textarea id="sessionNotes" rows="2" placeholder="Sensaciones, clima, cinta…"></textarea></label>
+      <section data-close-step="4" hidden>
+        <div class="form-grid two">
+          <label>Fecha<input type="date" id="sessionDate"></label>
+          <label>Tipo
+            <select id="sessionType">
+              <option value="Cinta">Cinta</option>
+              <option value="Exterior">Exterior</option>
+            </select>
+          </label>
+          <label>Tiempo<input type="text" id="sessionTime" placeholder="32:58"></label>
+          <label>Distancia
+            <div class="input-unit">
+              <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
+              <span>km</span>
+            </div>
+            <small class="field-hint" id="distanceHint">Si viene del timer de cinta, arranca como estimada hasta que la confirmes.</small>
+          </label>
+        </div>
+        <div class="distance-confirm-row" id="distanceConfirmRow">
+          <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
+          <button type="button" class="secondary-button compact" id="confirmDistanceBtn">Confirmar distancia real</button>
+        </div>
+        <div class="close-metric" id="maxRunBlockDisplay">
+          <span class="metric-label">Máx. continuo medido</span>
+          <strong id="sessionMaxRunBlockLabel">—</strong>
+          <small>Mayor tramo de carrera sin caminar. No inventamos capacidad extra.</small>
+          <small id="sessionExtraLabel" hidden></small>
+        </div>
+        <fieldset class="choice-fieldset">
+          <legend>¿Podías seguir corriendo? (opcional)</legend>
+          <div class="choice-row wrap">
+            <label><input type="radio" name="couldContinue" value="no"> No</label>
+            <label><input type="radio" name="couldContinue" value="2-5"> 2–5 min más</label>
+            <label><input type="radio" name="couldContinue" value="5plus"> &gt;5 min más</label>
+          </div>
+          <p class="field-hint">Esto nos ayuda a conocer tu margen; no suma minutos a tu tiempo continuo.</p>
+        </fieldset>
+        <label>Notas (opcional)<textarea id="sessionNotes" rows="2" placeholder="Sensaciones, clima, cinta…"></textarea></label>
+      </section>
 
       <div class="modal-actions">
-        <button class="secondary-button" type="button" data-close-dialog>Cancelar</button>
-        <button class="primary-button" type="submit" id="saveSession">Confirmar y guardar</button>
+        <button class="secondary-button" type="button" id="closeBack">Atrás</button>
+        <button class="primary-button" type="button" id="closeNext">Siguiente</button>
+        <button class="primary-button" type="submit" id="saveSession" hidden>Guardar</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="speedDialog" class="modal">
-    <form method="dialog" class="modal-card" id="speedForm">
+    <form method="dialog" class="modal-card" id="speedForm" novalidate>
       <div class="modal-heading">
         <div>
           <span class="eyebrow">ESTA SESIÓN</span>
@@ -375,14 +402,43 @@
         <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
       </div>
       <div class="form-grid three">
-        <label>Caminar<div class="input-unit"><input type="number" id="sessionWalkSpeed" step="0.1"><span>km/h</span></div></label>
-        <label>Correr<div class="input-unit"><input type="number" id="sessionRunSpeed" step="0.1"><span>km/h</span></div></label>
-        <label>Enfriar<div class="input-unit"><input type="number" id="sessionCoolSpeed" step="0.1"><span>km/h</span></div></label>
+        <label>Caminar<div class="input-unit"><input type="number" id="sessionWalkSpeed" step="0.1" min="3" max="8" inputmode="decimal"><span>km/h</span></div></label>
+        <label>Correr<div class="input-unit"><input type="number" id="sessionRunSpeed" step="0.1" min="5" max="16" inputmode="decimal"><span>km/h</span></div></label>
+        <label>Enfriar<div class="input-unit"><input type="number" id="sessionCoolSpeed" step="0.1" min="3" max="8" inputmode="decimal"><span>km/h</span></div></label>
       </div>
       <p class="helper-text">No cambia la estructura del plan. La progresión de duración va por el plan; la velocidad la controlás vos.</p>
       <div class="modal-actions">
         <button class="secondary-button" type="button" data-close-dialog>Cancelar</button>
         <button class="primary-button" type="submit" id="saveSpeeds">Aplicar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal">
+    <form method="dialog" class="modal-card" id="confirmForm">
+      <h2 id="confirmTitle">Confirmar</h2>
+      <p id="confirmBody"></p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="submit" id="confirmCancel" value="cancel">Volver</button>
+        <button class="primary-button" type="submit" id="confirmOk" value="ok">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rescheduleDialog" class="modal">
+    <form class="modal-card" id="rescheduleForm">
+      <div class="modal-heading">
+        <div>
+          <span class="eyebrow">MISMA SESIÓN</span>
+          <h2>Reprogramar</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+      </div>
+      <p>Elegí el día. El plan no avanza y no se crea un intento nuevo.</p>
+      <label>Nueva fecha<input type="date" id="rescheduleDate" required></label>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" data-close-dialog>Volver</button>
+        <button class="primary-button" type="submit">Reprogramar</button>
       </div>
     </form>
   </dialog>
