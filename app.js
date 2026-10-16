@@ -921,7 +921,7 @@
     }
 
     $('#readinessBadge').textContent = readiness.label;
-    $('#readinessBadge').className = `distance-badge level-${readiness.level}`;
+    $('#readinessBadge').className = `sr-only distance-badge level-${readiness.level}`;
     $('#readinessTarget').textContent = `foco ${readiness.focusTarget}`;
     $('#readinessConfidence').textContent = readiness.confidenceLabel;
     $('#readinessConfidence').className = `distance-badge conf conf-${readiness.confidence}`;

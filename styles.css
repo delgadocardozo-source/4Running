@@ -63,17 +63,18 @@ main { padding: 12px 22px 28px; max-width: 520px; margin: 0 auto; }
   font-weight: 650; margin-bottom: 10px;
 }
 #view-home h1, .prep-screen h1, .page-heading h1 { font-size: clamp(44px, 12vw, 64px); margin-bottom: 18px; }
+#view-home h1 { margin-bottom: 10px; }
 .lead { color: var(--muted); font-size: 16px; line-height: 1.45; margin-bottom: 22px; }
 
-.hero-metrics { display: flex; gap: 28px; margin: 8px 0 28px; }
+.hero-metrics { display: flex; gap: 28px; margin: 6px 0 18px; }
 .hero-metrics p { display: flex; flex-direction: column; gap: 2px; }
 .hero-metrics strong { font-size: clamp(40px, 11vw, 56px); letter-spacing: -0.05em; font-weight: 680; line-height: 0.9; }
 .hero-metrics span { color: var(--muted); font-size: 13px; }
 
-.script { display: grid; gap: 0; margin-bottom: 28px; }
+.script { display: grid; gap: 0; margin-bottom: 16px; }
 .script-row {
   display: grid; grid-template-columns: 72px 1fr auto; gap: 12px; align-items: center;
-  padding: 14px 0; border-top: 1px solid var(--line);
+  padding: 10px 0; border-top: 1px solid var(--line);
 }
 .script-row strong { font-size: 18px; font-weight: 650; letter-spacing: -0.03em; }
 .script-row span, .script-row em { font-style: normal; color: var(--muted); font-size: 14px; }
@@ -93,11 +94,11 @@ main { padding: 12px 22px 28px; max-width: 520px; margin: 0 auto; }
   color: var(--muted); padding: 12px 8px; font-size: 14px; font-weight: 600;
 }
 .text-button { color: var(--muted); padding: 12px 0; font-size: 13px; background: transparent; border: 0; cursor: pointer; }
-.today-preview { display: block; margin: 8px auto 0; }
-.quiet-actions { display: flex; justify-content: center; gap: 8px; margin: 8px 0 36px; flex-wrap: wrap; }
+.today-preview { display: block; margin: 2px auto 0; padding: 6px 0; }
+.quiet-actions { display: flex; justify-content: center; gap: 8px; margin: 2px 0 18px; flex-wrap: wrap; }
 #quietActions, #recoveryOffer { display: contents; }
 
-.goal { margin-top: 12px; margin-bottom: 28px; }
+.goal { margin-top: 8px; margin-bottom: 12px; }
 .goal-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
 .goal-head span:first-child { font-size: 15px; font-weight: 650; letter-spacing: -0.02em; }
 #readinessConfidence { color: var(--muted); font-size: 13px; }
@@ -106,7 +107,7 @@ main { padding: 12px 22px 28px; max-width: 520px; margin: 0 auto; }
 .goal-check { margin-top: 12px; color: var(--muted); font-size: 13px; }
 .goal-check strong { color: var(--ink); font-weight: 650; }
 .evidence-need { margin-top: 10px; color: var(--muted); font-size: 14px; line-height: 1.45; }
-.sequence-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 28px; }
+.sequence-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .seq-pill { width: 7px; height: 7px; border-radius: 99px; background: rgba(255,255,255,.16); font-size: 0; color: transparent; }
 .seq-pill.run.completed, .seq-pill.rest.completed { background: rgba(255,255,255,.72); }
 .seq-pill.run.pending { background: var(--ink); }
