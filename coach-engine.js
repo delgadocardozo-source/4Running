@@ -827,6 +827,9 @@
       alteredGait: Boolean(log.alteredGait),
       forcedStop: Boolean(log.forcedStop),
       severeWarning: Boolean(log.severeWarning),
+      environment: log.environment === 'treadmill' || log.environment === 'outdoor'
+        ? log.environment
+        : (log.type === 'Cinta' ? 'treadmill' : log.type === 'Exterior' ? 'outdoor' : null),
       reasonCode: decision.reasonCode || []
     };
     item.attempts.push(attempt);

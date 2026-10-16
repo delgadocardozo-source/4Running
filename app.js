@@ -11,7 +11,8 @@
     coolSpeed: 4.5,
     countdown: true,
     voice: true,
-    sound: true
+    sound: true,
+    lastEnvironment: null
   };
 
   let settings = loadSettings();
@@ -35,6 +36,12 @@
   let hasStarted = false;
   let maxCompletedRunBlockSec = 0;
   let currentRunCompletedSec = 0;
+  /** @type {'treadmill'|'outdoor'|null} */
+  let sessionEnvironment = null;
+  /** Evita contar el bloque nuevo durante preTransition → transition → blockStart. */
+  let transitionLock = false;
+  let speakGeneration = 0;
+  let lastSaveResult = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -286,22 +293,22 @@
     else blockDeadline = null;
   }
 
-  function applyBlock(index, announce = false) {
-    armBlock(index);
-    updateTimerUI();
-    if (announce) cueBlock(workout[currentBlockIndex]);
-  }
-
   function updateTimerUI() {
     const block = workout[currentBlockIndex];
     if (!block) return;
 
-    const remainingSec = getLiveRemainingMs() / 1000;
+    const remMs = getLiveRemainingMs();
+    const remainingSec = remMs / 1000;
     const elapsedSec = getLiveElapsedMs() / 1000;
+    const floorSec = Math.ceil(remainingSec);
+    const inPreTransition = running && !transitionLock && settings.countdown && floorSec <= 5 && floorSec > 0 && remMs > 0;
 
     $('#timerPhase').textContent = block.label.toUpperCase();
     $('#timerValue').textContent = formatTime(remainingSec);
-    $('#timerSpeed').textContent = speedLabel(block.speed);
+    $('#timerValue')?.classList.toggle('is-countdown', inPreTransition);
+    $('#view-train')?.classList.toggle('is-pre-transition', inPreTransition);
+    $('#view-train')?.classList.toggle('is-transition-lock', transitionLock);
+    renderIntensityUi(block);
     $('#phasePill').textContent = running ? block.label.toUpperCase() : (hasStarted ? 'Pausa' : 'Listo');
     $('#blockCounter').textContent = `${currentBlockIndex + 1} / ${workout.length}`;
     $('#mainTimerButton').textContent = running ? 'Pausa' : 'Continuar';
@@ -309,16 +316,23 @@
     $('#totalRemaining').textContent = formatTime(getRemainingPlanSeconds());
     $('#estimatedDistance').textContent = getEstimatedDistance();
 
-    const within = originalBlockMs ? (1 - getLiveRemainingMs() / originalBlockMs) : 0;
+    const within = originalBlockMs ? (1 - remMs / originalBlockMs) : 0;
     const sessionFrac = workout.length ? (currentBlockIndex + Math.max(0, Math.min(1, within))) / workout.length : 0;
     $('#timerRing').style.setProperty('--progress', String(sessionFrac));
     $('#view-train').dataset.phase = block.type;
 
     const next = workout[currentBlockIndex + 1];
     const cueTime = (sec) => formatTime(sec).replace(/^0/, '');
-    $('#nextBlock').innerHTML = next
-      ? `<span>Siguiente</span><strong>${escapeHtml(next.label.toUpperCase())} · ${cueTime(prescribedSeconds(next))}</strong><em>${escapeHtml(speedLabel(next.speed))}</em>`
-      : `<span>Siguiente</span><strong>Sesión completa</strong>`;
+    if (next) {
+      const nextBits = sessionEnvironment === 'treadmill'
+        ? `<em>${escapeHtml(speedLabel(next.speed))}</em>`
+        : next.type === 'run'
+          ? `<em>Ritmo cómodo · RPE 3–5</em>`
+          : `<em>Recuperá el aliento</em>`;
+      $('#nextBlock').innerHTML = `<span>Siguiente</span><strong>${escapeHtml(next.label.toUpperCase())} · ${cueTime(prescribedSeconds(next))}</strong>${nextBits}`;
+    } else {
+      $('#nextBlock').innerHTML = `<span>Siguiente</span><strong>Sesión completa</strong>`;
+    }
 
     const extra = block.extraSeconds || 0;
     const extraNote = $('#blockExtraNote');
@@ -351,8 +365,32 @@
     $$('.block-row').forEach((el, i) => el.classList.toggle('is-current', i === currentBlockIndex));
   }
 
+  function renderIntensityUi(block) {
+    const speedEl = $('#timerSpeed');
+    const effortEl = $('#timerEffort');
+    if (!speedEl) return;
+    const outdoor = sessionEnvironment === 'outdoor';
+    if (outdoor && (block.type === 'run' || block.type === 'walk')) {
+      speedEl.hidden = true;
+      if (effortEl) {
+        effortEl.hidden = false;
+        effortEl.innerHTML = block.type === 'run'
+          ? `<strong>Ritmo cómodo</strong><span>RPE objetivo 3–5 · frases cortas</span>`
+          : `<strong>Recuperá el aliento</strong><span>Caminá sin forzar</span>`;
+      }
+      return;
+    }
+    speedEl.hidden = false;
+    speedEl.textContent = speedLabel(block.speed);
+    if (effortEl) effortEl.hidden = true;
+  }
+
   function startTimer({ announceFirst = false } = {}) {
     if (running) return pauseTimer();
+    if (!sessionEnvironment) {
+      showToast('Elegí si entrenás en cinta o al aire libre');
+      return;
+    }
     if (finishedAnnounced) resetTimer({ quiet: true });
     const freshStart = !hasStarted;
     hasStarted = true;
@@ -364,19 +402,33 @@
     }
     running = true;
     ensureAudio();
+    warmSpeech();
     requestWakeLock();
-    const now = performance.now();
-    runStartedAt = now;
-    blockDeadline = now + remainingMs;
-    updateTimerUI();
-    if (announceFirst || freshStart) cueBlock(workout[currentBlockIndex]);
     clearInterval(timerId);
-    timerId = setInterval(syncTimer, 200);
+    timerId = setInterval(syncTimer, 100);
+    updateTimerUI();
+    if (announceFirst || freshStart) {
+      blockStart(workout[currentBlockIndex], { announce: true });
+    } else {
+      const now = performance.now();
+      runStartedAt = now;
+      blockDeadline = now + remainingMs;
+      transitionLock = false;
+      updateTimerUI();
+    }
     syncTimer();
   }
 
   function pauseTimer() {
-    if (running) {
+    if (transitionLock) {
+      speakGeneration += 1;
+      if ('speechSynthesis' in window) {
+        try { speechSynthesis.cancel(); } catch { /* */ }
+      }
+      remainingMs = blockBudgetMs(workout[currentBlockIndex] || { seconds: remainingMs / 1000 });
+      originalBlockMs = remainingMs;
+      transitionLock = false;
+    } else if (running) {
       remainingMs = getLiveRemainingMs();
       elapsedMs = getLiveElapsedMs();
     }
@@ -388,40 +440,93 @@
     updateTimerUI();
   }
 
+  /** preTransition: últimos 5 s del bloque actual. */
   function fireCountdownBeeps(remainingSecFloor) {
-    if (!settings.countdown) return;
+    if (!settings.countdown || transitionLock) return;
     for (let s = 5; s >= 1; s--) {
       if (remainingSecFloor <= s && remainingSecFloor > 0 && !countdownBeepsFired.has(s)) {
         countdownBeepsFired.add(s);
-        beep(s === 1 ? 840 : 620, 70);
+        beep(s === 1 ? 880 : 640, 85);
       }
     }
   }
 
   function syncTimer() {
-    if (!running) return;
+    if (!running || transitionLock) {
+      updateTimerUI();
+      return;
+    }
     const remMs = getLiveRemainingMs();
     fireCountdownBeeps(Math.ceil(remMs / 1000));
-    if (remMs <= 0) advanceExpiredBlocks();
-    updateTimerUI();
+    if (remMs <= 0) transition();
+    else updateTimerUI();
   }
 
-  function advanceExpiredBlocks() {
-    let guard = 0;
-    while (getLiveRemainingMs() <= 0 && guard < workout.length + 2) {
-      guard += 1;
-      noteRunProgressOnLeave();
-      if (currentBlockIndex >= workout.length - 1) {
-        finishWorkout();
+  /**
+   * transition: el bloque previo llegó a 0.
+   * No arranca el reloj del nuevo bloque hasta blockStart.
+   */
+  function transition() {
+    if (transitionLock) return;
+    noteRunProgressOnLeave();
+    if (currentBlockIndex >= workout.length - 1) {
+      finishWorkout();
+      return;
+    }
+    transitionLock = true;
+    if (running) {
+      elapsedMs = getLiveElapsedMs();
+      runStartedAt = performance.now();
+    }
+    armBlock(currentBlockIndex + 1);
+    blockDeadline = null;
+    updateTimerUI();
+    blockStart(workout[currentBlockIndex], { announce: true });
+  }
+
+  /**
+   * blockStart: UI ya muestra el bloque nuevo a duración completa.
+   * Sonido de cambio → voz del bloque → recién ahí corre el deadline.
+   */
+  function blockStart(block, { announce = true } = {}) {
+    if (!block) {
+      transitionLock = false;
+      return;
+    }
+    countdownBeepsFired.clear();
+    const beginClock = () => {
+      if (!running) {
+        transitionLock = false;
+        updateTimerUI();
         return;
       }
-      armBlock(currentBlockIndex + 1);
-      if (running) blockDeadline = performance.now() + remainingMs;
-      cueBlock(workout[currentBlockIndex]);
+      const now = performance.now();
+      runStartedAt = now;
+      remainingMs = blockBudgetMs(block);
+      originalBlockMs = remainingMs;
+      blockDeadline = now + remainingMs;
+      transitionLock = false;
+      updateTimerUI();
+    };
+
+    if (!announce) {
+      beginClock();
+      return;
     }
+
+    playChangeTone(block);
+    const gen = ++speakGeneration;
+    window.setTimeout(() => {
+      if (gen !== speakGeneration) return;
+      speakBlock(block, () => {
+        if (gen !== speakGeneration) return;
+        beginClock();
+      });
+    }, settings.sound ? 200 : 40);
   }
 
   async function nextBlock() {
+    if (transitionLock) return;
     if (currentBlockIndex >= workout.length - 1) return finishWorkout();
     if (hasStarted) {
       const ok = await askConfirm({
@@ -438,13 +543,19 @@
       elapsedMs = getLiveElapsedMs();
       runStartedAt = performance.now();
     }
+    transitionLock = true;
     armBlock(currentBlockIndex + 1);
-    if (wasRunning) blockDeadline = performance.now() + remainingMs;
-    cueBlock(workout[currentBlockIndex]);
+    blockDeadline = null;
     updateTimerUI();
+    if (wasRunning) blockStart(workout[currentBlockIndex], { announce: true });
+    else {
+      transitionLock = false;
+      updateTimerUI();
+    }
   }
 
   async function prevBlock() {
+    if (transitionLock) return;
     if (currentBlockIndex <= 0) return;
     if (hasStarted) {
       const ok = await askConfirm({
@@ -462,8 +573,12 @@
       runStartedAt = performance.now();
     }
     armBlock(currentBlockIndex - 1);
-    if (wasRunning) blockDeadline = performance.now() + remainingMs;
-    updateTimerUI();
+    if (wasRunning) {
+      transitionLock = true;
+      blockDeadline = null;
+      updateTimerUI();
+      blockStart(workout[currentBlockIndex], { announce: true });
+    } else updateTimerUI();
   }
 
   function addThirty() {
@@ -508,7 +623,11 @@
     if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#sessionPlanId').value = external ? '' : (activePlanSessionId || activeRunSession()?.id || '');
     $('#sessionDate').value = localDateISO();
-    $('#sessionType').value = fromTimer ? 'Cinta' : 'Exterior';
+    if (fromTimer && sessionEnvironment) {
+      $('#sessionType').value = sessionEnvironment === 'treadmill' ? 'Cinta' : 'Exterior';
+    } else if (!fromTimer) {
+      $('#sessionType').value = settings.lastEnvironment === 'treadmill' ? 'Cinta' : 'Exterior';
+    }
     clearChoice('prescriptionDone');
     clearChoice('sessionRpe');
     clearChoice('sessionPain');
@@ -609,7 +728,17 @@
   }
 
   function resetTimer({ quiet = false } = {}) {
-    pauseTimer();
+    speakGeneration += 1;
+    transitionLock = false;
+    if (running) {
+      remainingMs = getLiveRemainingMs();
+      elapsedMs = getLiveElapsedMs();
+    }
+    running = false;
+    runStartedAt = null;
+    blockDeadline = null;
+    clearInterval(timerId);
+    timerId = null;
     currentBlockIndex = 0;
     elapsedMs = 0;
     hasStarted = false;
@@ -633,6 +762,20 @@
     if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
   }
 
+  function warmSpeech() {
+    if (!('speechSynthesis' in window)) return;
+    try {
+      speechSynthesis.getVoices();
+      if (settings.voice) {
+        const warm = new SpeechSynthesisUtterance(' ');
+        warm.volume = 0;
+        warm.rate = 2;
+        speechSynthesis.speak(warm);
+        speechSynthesis.cancel();
+      }
+    } catch { /* speech warm */ }
+  }
+
   function beep(freq = 700, duration = 90) {
     if (!settings.sound) return;
     ensureAudio();
@@ -652,29 +795,229 @@
     } catch { /* audio */ }
   }
 
-  function speak(text) {
-    if (!settings.voice || !('speechSynthesis' in window)) return;
+  function playChangeTone(block) {
+    const tones = { warm: 520, run: 980, walk: 640, cool: 470 };
+    beep(tones[block?.type] || 760, 160);
+  }
+
+  function speak(text, onEnd) {
+    if (!settings.voice || !('speechSynthesis' in window) || !text) {
+      onEnd?.();
+      return;
+    }
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'es-ES';
       u.rate = 1.02;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        onEnd?.();
+      };
+      u.onend = finish;
+      u.onerror = finish;
       speechSynthesis.speak(u);
-    } catch { /* speech */ }
-  }
-
-  function cueBlock(block) {
-    const tones = { warm: 520, run: 900, walk: 620, cool: 470 };
-    beep(tones[block.type] || 700, 150);
-    speak(`${block.cue}. ${formatSpokenDuration(block.seconds)}. Velocidad ${String(block.speed).replace('.', ',')} kilómetros por hora.`);
+      window.setTimeout(finish, Math.min(8000, 1200 + String(text).length * 60));
+    } catch {
+      onEnd?.();
+    }
   }
 
   function formatSpokenDuration(seconds) {
     const wholeMinutes = Math.floor(seconds / 60);
-    const rem = seconds % 60;
+    const rem = Math.round(seconds % 60);
     if (wholeMinutes === 0) return `${rem} segundos`;
-    if (rem === 0) return wholeMinutes === 1 ? 'un minuto' : `${wholeMinutes} minutos`;
-    return `${wholeMinutes === 1 ? 'un minuto' : `${wholeMinutes} minutos`} ${rem} segundos`;
+    if (rem === 0) return wholeMinutes === 1 ? '1 minuto' : `${wholeMinutes} minutos`;
+    return `${wholeMinutes === 1 ? '1 minuto' : `${wholeMinutes} minutos`} ${rem} segundos`;
+  }
+
+  function speakBlock(block, onEnd) {
+    const dur = formatSpokenDuration(prescribedSeconds(block));
+    const verb = block.type === 'run' ? 'Correr'
+      : block.type === 'walk' ? 'Caminar'
+      : block.type === 'cool' ? 'Enfriar'
+      : 'Calentar';
+    let line = `${verb} durante ${dur}.`;
+    if (sessionEnvironment === 'treadmill') {
+      line = `${verb} durante ${dur} a ${String(block.speed).replace('.', ',')} kilómetros por hora.`;
+    } else if (sessionEnvironment === 'outdoor' && block.type === 'run') {
+      line = `${verb} durante ${dur}. Ritmo cómodo.`;
+    }
+    speak(line, onEnd);
+  }
+
+  /** @deprecated usar blockStart / speakBlock */
+  function cueBlock(block) {
+    playChangeTone(block);
+    speakBlock(block);
+  }
+
+  function applyBlock(index, announce = false) {
+    armBlock(index);
+    updateTimerUI();
+    if (announce) blockStart(workout[currentBlockIndex], { announce: true });
+  }
+
+  function environmentLabel(env) {
+    if (env === 'treadmill') return 'Cinta';
+    if (env === 'outdoor') return 'Aire libre';
+    return 'No registrado';
+  }
+
+  function setSessionEnvironment(env) {
+    if (env !== 'treadmill' && env !== 'outdoor') return;
+    sessionEnvironment = env;
+    settings.lastEnvironment = env;
+    persistSettings();
+    $$('[data-env]').forEach(btn => {
+      btn.classList.toggle('is-selected', btn.dataset.env === env);
+    });
+    const typeEl = $('#sessionType');
+    if (typeEl) typeEl.value = env === 'treadmill' ? 'Cinta' : 'Exterior';
+    updateTimerUI();
+  }
+
+  function decisionUserCopy(entry) {
+    const progression = entry?.progression;
+    const codes = entry?.reasonCode || [];
+    const rpe = entry?.rpe;
+    if (entry?.source === 'external') {
+      return {
+        cls: '',
+        title: 'Fuera del plan',
+        summary: 'Actividad externa. No movió el plan.',
+        chips: []
+      };
+    }
+    if (entry?.voluntary || entry?.type === 'Recuperación' || entry?.source === 'rest') {
+      return {
+        cls: 'recovery',
+        title: 'El plan quedó en pausa',
+        summary: 'Sesión de recuperación registrada. Esta sesión no avanzó ni completó el entrenamiento pendiente.',
+        chips: ['Recuperación']
+      };
+    }
+    if (progression === 'recovery' || codes.includes('SAFETY_OVERRIDE') || codes.includes('PAIN_MODERATE')) {
+      return {
+        cls: 'recovery',
+        title: 'Recuperación',
+        summary: 'Priorizamos recuperar antes de subir la carga. El plan principal no avanzó.',
+        chips: codes.includes('SAFETY_OVERRIDE') ? ['Señal de alerta'] : ['Molestia']
+      };
+    }
+    if (entry?.execution === 'skipped') {
+      return {
+        cls: 'skip',
+        title: 'Omitido',
+        summary: 'Esta sesión se omitió. El plan continuó con la siguiente.',
+        chips: []
+      };
+    }
+    if (progression === 'advance') {
+      return {
+        cls: 'advance',
+        title: 'Próximo paso: avanzar',
+        summary: 'Completaste la sesión con una intensidad adecuada y sin señales que indiquen mantener la carga.',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`] : []
+      };
+    }
+    if (progression === 'repeat') {
+      const high = Number(rpe) >= 7 || codes.includes('RPE_GE_7');
+      const incomplete = codes.includes('PRESCRIPTION_INCOMPLETE');
+      const lowConf = codes.includes('LOW_CONFIDENCE');
+      let summary = 'Mantendremos este nivel antes de aumentar la carga.';
+      if (incomplete) summary = 'La prescripción no se completó. Un esfuerzo bajo no alcanza para avanzar.';
+      else if (high) summary = 'El entrenamiento resultó más exigente de lo esperado. Mantendremos este nivel antes de aumentar la carga.';
+      else if (lowConf) summary = 'Todavía necesitamos más información antes de subir la carga. Repetimos este nivel.';
+      else if (codes.includes('ALERT_PRESENT')) summary = 'Hubo una señal de molestia. Por ahora mantenemos este nivel.';
+      const chips = [];
+      if (high && rpe != null) chips.push(`RPE alto · ${rpe}/10`);
+      else if (rpe != null) chips.push(`Esfuerzo ${rpe}/10`);
+      if (incomplete) chips.push('Incompleto');
+      return {
+        cls: 'repeat',
+        title: 'Próximo paso: repetir sesión',
+        summary,
+        chips
+      };
+    }
+    return { cls: '', title: '', summary: '', chips: [] };
+  }
+
+  function trendUserCopy(trend) {
+    const tone = trend?.tone || 'estable';
+    if (tone === 'favorable') {
+      return {
+        tone,
+        title: 'Buena progresión',
+        detail: 'Tus sesiones recientes muestran buena tolerancia al entrenamiento.'
+      };
+    }
+    if (tone === 'precaucion') {
+      return {
+        tone,
+        title: 'Precaución',
+        detail: 'Tus últimas sesiones muestran una carga mayor de la esperada.'
+      };
+    }
+    const valid = Coach().validTrainingAttempts(logs, plan);
+    if (valid.length < 2) {
+      return {
+        tone: 'estable',
+        title: 'Construyendo tendencia',
+        detail: 'Necesitamos más entrenamientos para evaluar tu evolución con mayor confianza.'
+      };
+    }
+    return {
+      tone: 'estable',
+      title: 'Estable',
+      detail: 'Tus sesiones recientes se mantienen en un rango similar.'
+    };
+  }
+
+  function lastFocusDecision() {
+    const focus = Coach().getFocusSession(plan);
+    const underlying = Coach().getUnderlyingPlanItem(plan, focus);
+    const attempts = underlying?.attempts || [];
+    if (!attempts.length) return null;
+    const last = attempts[attempts.length - 1];
+    const log = logs.find(l => l.id === last.logId) || null;
+    return { attempt: last, log, underlying, focus };
+  }
+
+  function adaptationCopy(result, log) {
+    const decision = result?.decision || {
+      progression: log?.progression,
+      reasonCode: log?.reasonCode || []
+    };
+    const copy = decisionUserCopy({ ...log, progression: decision.progression, reasonCode: decision.reasonCode || log?.reasonCode });
+    const next = result?.next || Coach().getFocusSession(plan);
+    let nextLine = '';
+    if (next?.kind === 'run' && next.structure) {
+      const st = next.structure;
+      nextLine = `Intervalos · ${formatMinutesLabel(st.runSeconds)} correr / ${formatMinutesLabel(st.walkSeconds)} caminar · ${st.reps} repeticiones`;
+    } else if (next?.kind === 'rest') {
+      nextLine = 'Recuperación en el plan';
+    } else {
+      nextLine = 'Sin sesión pendiente';
+    }
+    let headline = copy.title;
+    let body = copy.summary;
+    if (decision.progression === 'advance') {
+      headline = 'Vamos a avanzar';
+      body = 'Completaste el entrenamiento con buena tolerancia. El próximo entrenamiento aumentará ligeramente la carga.';
+    } else if (decision.progression === 'repeat') {
+      headline = Number(log?.rpe) >= 7 ? 'Mantendremos este nivel' : copy.title.replace(/^Próximo paso:\s*/i, '') || 'Mantendremos este nivel';
+      if (Number(log?.rpe) >= 7) {
+        body = 'El esfuerzo fue mayor al esperado. Por ahora no aumentaremos la carga.';
+      }
+    } else if (decision.progression === 'recovery') {
+      headline = 'Recuperación';
+      body = 'El plan principal no avanzó. Priorizamos recuperar antes de volver a la misma sesión.';
+    }
+    return { headline, body, nextLine, cls: copy.cls, chips: copy.chips };
   }
 
   async function requestWakeLock() {
@@ -802,18 +1145,6 @@
     return 'Intervalos';
   }
 
-  function historyDecision(entry) {
-    if (entry.source === 'external') return { text: 'Fuera del plan', cls: '' };
-    if (entry.progression === 'advance' && entry.type !== 'Recuperación') return { text: 'Avanza', cls: 'advance' };
-    if (entry.progression === 'repeat') return { text: 'Repetir', cls: 'repeat' };
-    if (entry.progression === 'recovery') return { text: 'Recuperación', cls: 'recovery' };
-    if (entry.execution === 'skipped') return { text: 'Omitido', cls: 'skip' };
-    if (entry.voluntary || entry.type === 'Recuperación' || entry.source === 'rest') {
-      return { text: 'Recuperación', cls: 'recovery' };
-    }
-    return { text: '', cls: '' };
-  }
-
   function renderHistory() {
     const sorted = sortedLogs();
     $('#historyCount').textContent = sorted.length;
@@ -822,8 +1153,14 @@
     const bestCont = sorted.filter(s => s.source !== 'external').reduce((m, s) => Math.max(m, Number(s.maxRunBlockSec) || 0), 0);
     $('#bestContinuous').textContent = bestCont ? Coach().formatBlock(bestCont) : '—';
 
-    const trend = Coach().summarizeTrend(logs, plan);
-    $('#historyTrend').innerHTML = `<span class="metric-label">Tendencia</span><strong class="metric-status ${trend.tone}">${escapeHtml(trend.headline)}</strong>`;
+    const trend = trendUserCopy(Coach().summarizeTrend(logs, plan));
+    $('#historyTrend').innerHTML = `
+      <div class="trend-block">
+        <span class="metric-label">Tu tendencia</span>
+        <strong class="metric-status ${trend.tone}">${escapeHtml(trend.title)}</strong>
+        <p class="trend-detail">${escapeHtml(trend.detail)}</p>
+        <p class="trend-hint">La tendencia mira varias sesiones. Cada entrenamiento también tiene su propia decisión.</p>
+      </div>`;
 
     $('#historyList').innerHTML = sorted.map(s => {
       const date = new Date(`${s.date}T12:00:00`);
@@ -833,26 +1170,45 @@
       const bits = [];
       if (s.time) bits.push(s.time);
       if (typeof s.distanceKm === 'number') bits.push(`${s.distanceKm.toFixed(2).replace('.', ',')} km`);
-      if (s.rpe != null) bits.push(`RPE ${s.rpe}`);
-      const cont = s.maxRunBlockSec != null && kind === 'Intervalos' ? `Continuo ${Coach().formatBlock(s.maxRunBlockSec).replace(/^0/, '')}` : '';
-      const note = kind === 'Recuperación'
-        ? (s.notes || (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : ''))
-        : (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : '');
-      const decision = historyDecision(s);
-      const mark = decision.cls
-        ? `<span class="history-mark ${decision.cls}" aria-hidden="true">${decision.cls === 'advance' ? '✓' : decision.cls === 'repeat' ? '↻' : decision.cls === 'recovery' ? 'R' : '×'}</span>`
-        : '';
+      if (s.rpe != null) bits.push(`Esfuerzo ${s.rpe}/10`);
+      const decision = decisionUserCopy(s);
+      const chips = decision.chips.map(c => `<span class="history-chip">${escapeHtml(c)}</span>`).join('');
       return `
-        <article class="history-item">
-          <div class="history-kicker"><strong>${day} ${month} ${date.getFullYear()}</strong>${mark}</div>
+        <button type="button" class="history-item" data-log-id="${escapeHtml(s.id)}">
+          <div class="history-kicker"><strong>${day} ${month} ${date.getFullYear()}</strong></div>
           <div class="history-kind">${escapeHtml(kind)}</div>
           ${bits.length ? `<p class="history-facts">${escapeHtml(bits.join(' · '))}</p>` : ''}
-          ${cont ? `<p class="history-facts">${escapeHtml(cont)}</p>` : ''}
-          ${note ? `<p class="history-facts">${escapeHtml(note)}</p>` : ''}
-          ${decision.text ? `<p class="history-decision ${decision.cls}">${escapeHtml(decision.text)}</p>` : ''}
-        </article>
+          ${decision.title ? `<p class="history-decision ${decision.cls}">${escapeHtml(decision.title)}</p>` : ''}
+          ${decision.summary ? `<p class="history-why">${escapeHtml(decision.summary)}</p>` : ''}
+          ${chips ? `<div class="history-chips">${chips}</div>` : ''}
+        </button>
       `;
     }).join('');
+  }
+
+  function openHistoryDetail(logId) {
+    const s = logs.find(l => l.id === logId);
+    if (!s) return;
+    const decision = decisionUserCopy(s);
+    const env = s.environment || (s.type === 'Cinta' ? 'treadmill' : s.type === 'Exterior' ? 'outdoor' : null);
+    const rows = [
+      ['Fecha', s.date],
+      ['Tipo', historyKind(s)],
+      ['Duración', s.time || '—'],
+      ['Distancia', typeof s.distanceKm === 'number' ? `${s.distanceKm.toFixed(2).replace('.', ',')} km` : '—'],
+      ['Lugar', environmentLabel(env)],
+      ['Máx. continuo', s.maxRunBlockSec != null ? Coach().formatBlock(s.maxRunBlockSec) : '—'],
+      ['Esfuerzo', s.rpe != null ? `${s.rpe}/10` : '—'],
+      ['Completado', s.prescriptionCompleted === false || s.execution === 'aborted' ? 'Incompleto' : (s.execution === 'skipped' ? 'Omitido' : 'Sí')],
+      ['Molestia', s.pain ? `${s.painLocation || 'Sí'}${s.painIntensity != null ? ` · ${s.painIntensity}/5` : ''}` : 'No'],
+      ['Decisión', decision.title || '—'],
+      ['Motivo', decision.summary || '—']
+    ];
+    $('#historyDetailTitle').textContent = historyKind(s);
+    $('#historyDetailBody').innerHTML = rows.map(([k, v]) => `
+      <div class="detail-row"><span>${escapeHtml(k)}</span><strong>${escapeHtml(String(v))}</strong></div>
+    `).join('');
+    if (!$('#historyDetailDialog').open) $('#historyDetailDialog').showModal();
   }
 
   function renderSequence() {
@@ -930,6 +1286,30 @@
       $('#homeCoolSpeed').textContent = speedLabel(settings.coolSpeed);
     }
 
+    const adaptNote = $('#homeAdaptNote');
+    if (adaptNote) {
+      const ctx = lastFocusDecision();
+      if (isRun && ctx?.attempt) {
+        const copy = decisionUserCopy({ ...(ctx.log || {}), progression: ctx.attempt.progression, reasonCode: ctx.attempt.reasonCode, rpe: ctx.attempt.rpe });
+        if (ctx.attempt.progression === 'repeat') {
+          adaptNote.hidden = false;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Mantenemos esta sesión</strong><em>${escapeHtml(Number(ctx.attempt.rpe) >= 7 ? 'La anterior resultó muy exigente.' : copy.summary)}</em>`;
+        } else if (ctx.attempt.progression === 'recovery') {
+          adaptNote.hidden = false;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Seguís en la misma sesión</strong><em>La recuperación no avanzó el plan.</em>`;
+        } else if (ctx.attempt.progression === 'advance' && lastSaveResult?.progression === 'advance') {
+          adaptNote.hidden = false;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Avanzamos</strong><em>Completaste bien la sesión anterior.</em>`;
+        } else {
+          adaptNote.hidden = true;
+          adaptNote.innerHTML = '';
+        }
+      } else {
+        adaptNote.hidden = true;
+        adaptNote.innerHTML = '';
+      }
+    }
+
     $('#readinessBadge').textContent = readiness.label;
     $('#readinessBadge').className = `sr-only distance-badge level-${readiness.level}`;
     $('#readinessTarget').textContent = `foco ${readiness.focusTarget}`;
@@ -990,10 +1370,15 @@
     const date = $('#sessionDate').value || localDateISO();
     const id = `${date}-${Date.now()}`;
     const prescriptionCompleted = done === 'yes';
+    const typeValue = $('#sessionType').value;
+    const environment = typeValue === 'Cinta' ? 'treadmill'
+      : typeValue === 'Exterior' ? 'outdoor'
+      : (sessionEnvironment || settings.lastEnvironment || null);
     const log = {
       id,
       date,
-      type: $('#sessionType').value,
+      type: typeValue,
+      environment,
       planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
       time: $('#sessionTime').value.trim() || null,
       distanceKm: parseOptionalNumber($('#sessionDistance').value),
@@ -1017,13 +1402,14 @@
     };
 
     logs.push(log);
+    let result = null;
 
     if (log.planSessionId && !external) {
-      const result = Coach().confirmNextSession(plan, log, logs);
+      result = Coach().confirmNextSession(plan, log, logs);
       plan = result.plan;
+      lastSaveResult = result;
       Coach().savePlan(plan);
       Coach().saveLogs(logs);
-      showToast(result.message || 'Intento guardado');
       if (result.medicalNotice || result.decision?.medicalNotice) {
         setTimeout(() => {
           showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
@@ -1031,8 +1417,13 @@
       }
     } else {
       Coach().saveLogs(logs);
-      showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado (sin mover el plan)');
+      lastSaveResult = null;
       audit('log-unlinked', { source: log.source, id: log.id });
+    }
+
+    if (environment) {
+      settings.lastEnvironment = environment;
+      persistSettings();
     }
 
     $('#sessionDialog').close();
@@ -1042,7 +1433,38 @@
     reloadWorkoutFromPlan();
     renderHistory();
     renderHome();
-    navTo('home');
+    if (result && !external) showAdaptationResult(result, log);
+    else {
+      showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
+      navTo('home');
+    }
+  }
+
+  function showAdaptationResult(result, log) {
+    const adapt = adaptationCopy(result, log);
+    const dialog = $('#adaptDialog');
+    if (!dialog) {
+      navTo('home');
+      return;
+    }
+    $('#adaptEyebrow').textContent = 'Entrenamiento completado';
+    $('#adaptTime').textContent = log.time || '—';
+    $('#adaptDistance').textContent = typeof log.distanceKm === 'number'
+      ? `${log.distanceKm.toFixed(2).replace('.', ',')} km`
+      : '—';
+    $('#adaptEffort').textContent = log.rpe != null ? `${log.rpe}/10` : '—';
+    $('#adaptEffortNote').textContent = Number(log.rpe) >= 7 ? 'Muy exigente' : Number(log.rpe) <= 5 ? 'Cómodo' : 'Moderado';
+    $('#adaptPlace').textContent = `Realizado en: ${environmentLabel(log.environment)}`;
+    const action = $('#adaptAction');
+    action.className = `adapt-action ${adapt.cls}`;
+    action.innerHTML = `<strong>${escapeHtml(adapt.headline)}</strong><p>${escapeHtml(adapt.body)}</p>`;
+    $('#adaptNext').textContent = adapt.nextLine;
+    $('#adaptHint').textContent = result.progression === 'advance'
+      ? 'Queremos ver cómo responde tu cuerpo con el siguiente estímulo.'
+      : result.progression === 'repeat'
+        ? 'Queremos ver cómo responde tu cuerpo antes de aumentar.'
+        : 'Cuando estés listo, volvés a la misma sesión del plan.';
+    if (!dialog.open) dialog.showModal();
   }
 
   function reloadWorkoutFromPlan() {
@@ -1238,7 +1660,10 @@
         showToast('Hoy no hay intervalos para iniciar.');
         return;
       }
+      ensureAudio();
+      warmSpeech();
       if (!hasStarted) resetTimer({ quiet: true });
+      if (settings.lastEnvironment) setSessionEnvironment(settings.lastEnvironment);
       navTo('train');
     });
     $('#previewWorkout').addEventListener('click', () => {
@@ -1246,7 +1671,27 @@
       $('#blockList').hidden = false;
       navTo('train');
     });
-    $('#beginWorkout').addEventListener('click', () => startTimer({ announceFirst: true }));
+    $$('[data-env]').forEach(btn => {
+      btn.addEventListener('click', () => setSessionEnvironment(btn.dataset.env));
+    });
+    $('#beginWorkout').addEventListener('click', () => {
+      if (!sessionEnvironment) {
+        showToast('Elegí cinta o aire libre antes de comenzar');
+        return;
+      }
+      ensureAudio();
+      warmSpeech();
+      startTimer({ announceFirst: true });
+    });
+    $('#historyList').addEventListener('click', (e) => {
+      const item = e.target.closest('[data-log-id]');
+      if (item) openHistoryDetail(item.dataset.logId);
+    });
+    $('#adaptDone')?.addEventListener('click', () => {
+      $('#adaptDialog')?.close();
+      navTo('home');
+      renderHome();
+    });
     $('#goalDetailToggle').addEventListener('click', () => {
       const detail = $('#evidenceNeed');
       detail.hidden = !detail.hidden;
