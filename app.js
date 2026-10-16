@@ -268,12 +268,9 @@
   }
 
   function updateTrainHeader() {
-    const focus = activeRunSession();
-    const st = focusStructure();
-    $('#trainEyebrow').textContent = focus ? 'HOY' : 'ENTRENAMIENTO';
-    $('#trainTitle').textContent = 'Intervalos';
-    const totalMin = structureDurationMin(st);
-    $('#trainMeta').textContent = `${totalMin} min · ${formatKm(estimateStructureKm(st))} estimados`;
+    $('#trainEyebrow').textContent = 'Hoy';
+    $('#trainTitle').textContent = 'Listo para entrenar';
+    $('#trainMeta').textContent = 'Verificá que todo esté funcionando antes de empezar.';
   }
 
   function armBlock(index) {
@@ -305,22 +302,23 @@
     $('#timerPhase').textContent = block.label.toUpperCase();
     $('#timerValue').textContent = formatTime(remainingSec);
     $('#timerSpeed').textContent = speedLabel(block.speed);
-    $('#phasePill').textContent = running ? block.label.toUpperCase() : (hasStarted ? 'PAUSADO' : 'PREPARADO');
-    $('#phasePill').style.background = `var(--${block.type})`;
-    $('#blockCounter').textContent = `Bloque ${currentBlockIndex + 1} / ${workout.length}`;
-    $('#mainTimerButton').textContent = running ? 'PAUSAR' : (hasStarted ? 'CONTINUAR' : 'INICIAR');
+    $('#phasePill').textContent = running ? block.label.toUpperCase() : (hasStarted ? 'Pausa' : 'Listo');
+    $('#blockCounter').textContent = `${currentBlockIndex + 1} / ${workout.length}`;
+    $('#mainTimerButton').textContent = running ? 'Pausa' : 'Continuar';
     $('#totalElapsed').textContent = formatTime(elapsedSec);
     $('#totalRemaining').textContent = formatTime(getRemainingPlanSeconds());
     $('#estimatedDistance').textContent = getEstimatedDistance();
 
-    const progress = originalBlockMs ? (1 - getLiveRemainingMs() / originalBlockMs) * 360 : 0;
-    $('#timerRing').style.setProperty('--progress', `${Math.max(0, Math.min(360, progress))}deg`);
+    const within = originalBlockMs ? (1 - getLiveRemainingMs() / originalBlockMs) : 0;
+    const sessionFrac = workout.length ? (currentBlockIndex + Math.max(0, Math.min(1, within))) / workout.length : 0;
+    $('#timerRing').style.setProperty('--progress', String(sessionFrac));
+    $('#view-train').dataset.phase = block.type;
 
     const next = workout[currentBlockIndex + 1];
     const cueTime = (sec) => formatTime(sec).replace(/^0/, '');
-    $('#nextBlock').textContent = next
-      ? `Después → ${next.label.toUpperCase()} ${cueTime(prescribedSeconds(next))}`
-      : 'Después → sesión completa';
+    $('#nextBlock').innerHTML = next
+      ? `<span>Siguiente</span><strong>${escapeHtml(next.label.toUpperCase())} · ${cueTime(prescribedSeconds(next))}</strong><em>${escapeHtml(speedLabel(next.speed))}</em>`
+      : `<span>Siguiente</span><strong>Sesión completa</strong>`;
 
     const extra = block.extraSeconds || 0;
     const extraNote = $('#blockExtraNote');
@@ -332,7 +330,11 @@
       extraNote.textContent = '';
     }
     const prep = $('#prepPanel');
+    const active = $('#activeStage');
     if (prep) prep.hidden = hasStarted;
+    if (active) active.hidden = !hasStarted;
+    const onTrain = $('#view-train')?.classList.contains('is-active');
+    document.body.classList.toggle('is-running', Boolean(running && onTrain));
 
     const live = $('#timerLive');
     if (live) {
@@ -470,6 +472,24 @@
     updateTimerUI();
   }
 
+  function subtractThirty() {
+    const block = workout[currentBlockIndex];
+    if (!block) return;
+    const live = getLiveRemainingMs();
+    const cut = Math.min(30000, live - 5000);
+    if (cut < 1000) {
+      showToast('Este bloque ya está por terminar');
+      return;
+    }
+    remainingMs = live - cut;
+    originalBlockMs = Math.max(1000, originalBlockMs - cut);
+    block.extraSeconds = Math.max(0, (block.extraSeconds || 0) - 30);
+    if (running) blockDeadline = performance.now() + remainingMs;
+    showToast(`−30 s en este bloque. Prescrito ${formatTime(prescribedSeconds(block))}.`);
+    audit('minus-30', { type: block.type, extraSeconds: block.extraSeconds, prescribed: prescribedSeconds(block) });
+    updateTimerUI();
+  }
+
   function prepareCloseForm({ external = false, fromTimer = false } = {}) {
     $('#sessionForm').reset();
     $('#sessionExternal').value = external ? '1' : '0';
@@ -477,7 +497,8 @@
     $('#closeContext').hidden = !external;
     $('#resultQuestion').textContent = external
       ? '¿Registramos esta actividad?'
-      : '¿Terminaste todos los bloques?';
+      : '¿Completaste la prescripción?';
+    if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#sessionPlanId').value = external ? '' : (activePlanSessionId || activeRunSession()?.id || '');
     $('#sessionDate').value = localDateISO();
     $('#sessionType').value = fromTimer ? 'Cinta' : 'Exterior';
@@ -520,11 +541,17 @@
     const doneAll = finishedAnnounced && currentBlockIndex >= workout.length - 1;
     const yes = document.querySelector('input[name="prescriptionDone"][value="yes"]');
     if (doneAll && yes) yes.checked = true;
+    if ($('#finishHero')) {
+      $('#finishHero').hidden = false;
+      $('#finishTime').textContent = $('#sessionTime').value || '—';
+      $('#finishDistance').textContent = distance ? `${formatKm(distance)} estimados` : '—';
+      $('#finishContinuous').textContent = maxSec ? Coach().formatBlock(maxSec).replace(/^0/, '') : '—';
+    }
     if (!$('#sessionDialog').open) $('#sessionDialog').showModal();
   }
 
   function showCloseStep(step) {
-    const titles = { 1: 'Resultado', 2: 'RPE', 3: 'Molestias', 4: 'Datos' };
+    const titles = { 1: 'Resultado', 2: 'Molestia', 3: 'Guardar' };
     $$('[data-close-step]').forEach(el => {
       el.hidden = Number(el.dataset.closeStep) !== step;
     });
@@ -535,25 +562,25 @@
     });
     $('#closeTitle').textContent = titles[step] || 'Cierre';
     $('#closeBack').hidden = step === 1;
-    $('#closeNext').hidden = step === 4;
-    $('#saveSession').hidden = step !== 4;
+    $('#closeNext').hidden = step === 3;
+    $('#saveSession').hidden = step !== 3;
     $('#sessionDialog').dataset.step = String(step);
   }
 
   function validateCloseStep(step) {
     if (step === 1 && !selectedValue('prescriptionDone')) {
-      showToast($('#sessionExternal').value === '1' ? 'Confirmá si registramos la actividad' : 'Indicá si terminaste todos los bloques');
+      showToast($('#sessionExternal').value === '1' ? 'Confirmá si registramos la actividad' : 'Indicá si completaste la prescripción');
       return false;
     }
-    if (step === 2 && !selectedValue('sessionRpe')) {
+    if (step === 1 && !selectedValue('sessionRpe')) {
       showToast('Elegí un RPE del 1 al 10');
       return false;
     }
-    if (step === 3 && !selectedValue('sessionPain')) {
+    if (step === 1 && !selectedValue('sessionPain')) {
       showToast('Indicá si hubo dolor o molestia');
       return false;
     }
-    if (step === 3 && $('#painYes').checked && !$('#sessionPainLocation').value.trim()) {
+    if (step === 2 && $('#painYes').checked && !$('#sessionPainLocation').value.trim()) {
       showToast('Indicá la ubicación de la molestia');
       return false;
     }
@@ -697,18 +724,18 @@
     if (sound) {
       sound.classList.toggle('is-on', settings.sound);
       sound.classList.toggle('is-off', !settings.sound);
-      $('#prepSoundState').textContent = settings.sound ? 'listo' : 'apagado';
+      $('#prepSoundState').textContent = settings.sound ? 'Listo' : 'Apagado';
     }
     if (voice) {
       voice.classList.toggle('is-on', settings.voice);
       voice.classList.toggle('is-off', !settings.voice);
-      $('#prepVoiceState').textContent = settings.voice ? 'lista' : 'apagada';
+      $('#prepVoiceState').textContent = settings.voice ? 'Lista' : 'Apagada';
     }
     const wake = $('#prepWake');
     if (wake) {
       wake.classList.toggle('is-on', wakeOn);
       wake.classList.toggle('is-off', !wakeOn);
-      $('#prepWakeState').textContent = wakeOn ? 'activa' : 'apagada';
+      $('#prepWakeState').textContent = wakeOn ? 'Lista' : 'Apagada';
     }
   }
 
@@ -731,6 +758,7 @@
   function navTo(view) {
     $$('.view').forEach(v => v.classList.toggle('is-active', v.dataset.view === view));
     $$('.nav-item').forEach(n => n.classList.toggle('is-active', n.dataset.nav === view));
+    document.body.classList.toggle('is-running', view === 'train' && running);
     window.scrollTo({ top: 0, behavior: 'smooth' });
     history.replaceState(null, '', `#${view}`);
     setTimeout(() => $('#app').focus({ preventScroll: true }), 50);
@@ -769,14 +797,13 @@
 
   function historyDecision(entry) {
     if (entry.source === 'external') return { text: 'Fuera del plan', cls: '' };
-    if (entry.progression === 'advance' && entry.type !== 'Recuperación') return { text: '→ Avanza', cls: 'advance' };
-    if (entry.progression === 'repeat') return { text: '↻ Repetir', cls: 'repeat' };
-    if (entry.progression === 'recovery') return { text: 'Recuperación del plan', cls: 'recovery' };
-    if (entry.execution === 'skipped') return { text: 'Omitida', cls: '' };
-    if (entry.voluntary || (entry.type === 'Recuperación' && entry.progression == null)) {
-      return { text: 'El plan no avanzó', cls: 'recovery' };
+    if (entry.progression === 'advance' && entry.type !== 'Recuperación') return { text: 'Avanza', cls: 'advance' };
+    if (entry.progression === 'repeat') return { text: 'Repetir', cls: 'repeat' };
+    if (entry.progression === 'recovery') return { text: 'Recuperación', cls: 'recovery' };
+    if (entry.execution === 'skipped') return { text: 'Omitido', cls: 'skip' };
+    if (entry.voluntary || entry.type === 'Recuperación' || entry.source === 'rest') {
+      return { text: 'Recuperación', cls: 'recovery' };
     }
-    if (entry.type === 'Recuperación') return { text: 'Día de recuperación', cls: 'recovery' };
     return { text: '', cls: '' };
   }
 
@@ -789,35 +816,29 @@
     $('#bestContinuous').textContent = bestCont ? Coach().formatBlock(bestCont) : '—';
 
     const trend = Coach().summarizeTrend(logs, plan);
-    $('#historyTrend').innerHTML = `<span class="metric-label">Tendencia</span><strong class="metric-status ${trend.tone}">${escapeHtml(trend.glyph)} ${escapeHtml(trend.headline)}</strong><small>${escapeHtml(trend.detail)}</small>`;
+    $('#historyTrend').innerHTML = `<span class="metric-label">Tendencia</span><strong class="metric-status ${trend.tone}">${escapeHtml(trend.headline)}</strong>`;
 
     $('#historyList').innerHTML = sorted.map(s => {
       const date = new Date(`${s.date}T12:00:00`);
       const day = String(date.getDate()).padStart(2, '0');
       const month = date.toLocaleDateString('es-PY', { month: 'short' }).replace('.', '').toUpperCase();
       const kind = historyKind(s);
-      const outcome = s.execution === 'aborted' ? 'Incompleto' : s.execution === 'skipped' ? 'Omitida' : 'Completado';
       const bits = [];
       if (s.time) bits.push(s.time);
+      if (typeof s.distanceKm === 'number') bits.push(`${s.distanceKm.toFixed(2).replace('.', ',')} km`);
       if (s.rpe != null) bits.push(`RPE ${s.rpe}`);
-      if (typeof s.distanceKm === 'number') {
-        bits.push(`${s.distanceKm.toFixed(2).replace('.', ',')} km${s.distanceEstimated ? ' estimados' : ''}`);
-      }
-      const cont = s.maxRunBlockSec != null && kind === 'Intervalos' ? `Continuo ${Coach().formatBlock(s.maxRunBlockSec)}` : '';
-      const pain = s.pain
-        ? `Molestia ${s.painLocation || ''}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}`.trim()
-        : '';
+      const cont = s.maxRunBlockSec != null && kind === 'Intervalos' ? `Continuo ${Coach().formatBlock(s.maxRunBlockSec).replace(/^0/, '')}` : '';
+      const note = kind === 'Recuperación'
+        ? (s.notes || (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : ''))
+        : (s.pain ? `${s.painLocation || 'Molestia'}${s.painIntensity ? ` ${s.painIntensity}/5` : ''}` : '');
       const decision = historyDecision(s);
       return `
-        <article class="history-item card">
-          <div class="history-kicker">
-            <strong>${day} ${month} · ${escapeHtml(kind)}</strong>
-            <span class="history-outcome">${kind === 'Recuperación' ? 'Registrada' : escapeHtml(outcome)}</span>
-          </div>
+        <article class="history-item">
+          <div class="history-kicker"><strong>${day} ${month} ${date.getFullYear()}</strong></div>
+          <div class="history-kind">${escapeHtml(kind)}</div>
           ${bits.length ? `<p class="history-facts">${escapeHtml(bits.join(' · '))}</p>` : ''}
           ${cont ? `<p class="history-facts">${escapeHtml(cont)}</p>` : ''}
-          ${pain ? `<p class="history-facts">${escapeHtml(pain)}</p>` : ''}
-          ${s.notes && kind === 'Recuperación' ? `<p class="history-facts">${escapeHtml(s.notes)}</p>` : ''}
+          ${note ? `<p class="history-facts">${escapeHtml(note)}</p>` : ''}
           ${decision.text ? `<p class="history-decision ${decision.cls}">${escapeHtml(decision.text)}</p>` : ''}
         </article>
       `;
@@ -852,7 +873,8 @@
     const isRest = focus?.kind === 'rest';
     const isRun = focus?.kind === 'run';
 
-    $('#coachEyebrow').textContent = 'HOY';
+    const sessionMatch = String(focus?.title || '').match(/sesi[oó]n\s*(\d+)/i);
+    $('#coachEyebrow').textContent = sessionMatch ? `Hoy · Sesión ${sessionMatch[1]}` : 'Hoy';
     $('#todayRun').hidden = !isRun;
     $('#todayRest').hidden = !isRest;
     $('#todayDone').hidden = Boolean(focus);
@@ -882,10 +904,20 @@
       const minutes = structureDurationMin(st);
       const km = estimateStructureKm(st);
       $('#coachTitle').textContent = 'Intervalos';
-      $('#coachMeta').textContent = `${minutes} min · ${formatKm(km)} estimados`;
-      $('#homeWarmLine').textContent = `${formatMinutesLabel(st.warmSeconds)} calentamiento`;
-      $('#homeWorkLine').textContent = `${st.reps}× · ${formatMinutesLabel(st.runSeconds)} correr / ${formatMinutesLabel(st.walkSeconds)} caminar`;
-      $('#homeCoolLine').textContent = `${formatMinutesLabel(st.coolSeconds)} enfriamiento`;
+      $('#homeMinutes').textContent = String(minutes);
+      $('#homeKm').textContent = km.toFixed(2).replace('.', ',');
+      const cue = (sec) => formatTime(sec).replace(/^0/, '');
+      $('#homeWarmDur').textContent = formatMinutesLabel(st.warmSeconds);
+      $('#homeWarmLine').textContent = 'Calentamiento';
+      $('#homeWarmSpeed').textContent = speedLabel(settings.walkSpeed);
+      $('#homeReps').textContent = `${st.reps}×`;
+      $('#homeWorkLine').textContent = `Correr ${cue(st.runSeconds)}`;
+      $('#homeWalkLine').textContent = `Caminar ${cue(st.walkSeconds)}`;
+      $('#homeRunSpeed').textContent = speedLabel(settings.runSpeed);
+      $('#homeWalkSpeed').textContent = speedLabel(settings.walkSpeed);
+      $('#homeCoolDur').textContent = formatMinutesLabel(st.coolSeconds);
+      $('#homeCoolLine').textContent = 'Enfriamiento';
+      $('#homeCoolSpeed').textContent = speedLabel(settings.coolSpeed);
     }
 
     $('#readinessBadge').textContent = readiness.label;
@@ -893,9 +925,11 @@
     $('#readinessTarget').textContent = `foco ${readiness.focusTarget}`;
     $('#readinessConfidence').textContent = readiness.confidenceLabel;
     $('#readinessConfidence').className = `distance-badge conf conf-${readiness.confidence}`;
-    $('#readinessHeadline').textContent = '2K o 5K';
+    $('#readinessHeadline').textContent = `Objetivo · ${readiness.focusTarget}`;
     $('#readinessSummary').textContent = 'Decidimos por evidencia, no por entusiasmo.';
     $('#evidenceNeed').textContent = evidenceCopy(readiness);
+    const fill = readiness.level === 'listo' ? 100 : readiness.level === 'cerca' ? 58 : 22;
+    $('#readinessBar')?.style.setProperty('--fill', `${fill}%`);
     $('#checkpointLabel').textContent = formatShortDate(plan.checkpointDate);
     const checkpointDays = readiness.daysToCheckpoint;
     $('#checkpointCountdown').textContent = checkpointDays == null
@@ -921,7 +955,7 @@
     const painVal = selectedValue('sessionPain');
     if (!rpe || !painVal) {
       showToast('Completá RPE y molestia/dolor');
-      showCloseStep(!rpe ? 2 : 3);
+      showCloseStep(1);
       return;
     }
     const pain = painVal === 'yes';
@@ -937,7 +971,7 @@
     }
     if (!$('#sessionDate').value || !$('#sessionTime').value.trim()) {
       showToast('Completá fecha y tiempo');
-      showCloseStep(4);
+      showCloseStep(3);
       return;
     }
 
@@ -1174,6 +1208,8 @@
     }).replace('.', '');
     const days = Coach().calendarDaysUntil(plan.raceDate, now);
     $('#daysToRace').textContent = days == null ? '—' : String(Math.max(0, days));
+    const raceLabel = $('#raceDateLabel');
+    if (raceLabel) raceLabel.textContent = formatShortDate(plan.raceDate).toUpperCase();
   }
 
   function handleVisibility() {
@@ -1197,7 +1233,13 @@
     });
     $('#previewWorkout').addEventListener('click', () => {
       if (!hasStarted) resetTimer({ quiet: true });
+      $('#blockList').hidden = false;
       navTo('train');
+    });
+    $('#beginWorkout').addEventListener('click', () => startTimer({ announceFirst: true }));
+    $('#goalDetailToggle').addEventListener('click', () => {
+      const detail = $('#evidenceNeed');
+      detail.hidden = !detail.hidden;
     });
     $('#markRestPlan').addEventListener('click', () => {
       const focus = Coach().getFocusSession(plan);
@@ -1282,6 +1324,9 @@
     $('#confirmDistanceBtn').addEventListener('click', () => {
       $('#sessionDistanceEstimated').checked = false;
       syncDistanceEstimateUi();
+      if ($('#finishDistance') && $('#sessionDistance').value) {
+        $('#finishDistance').textContent = formatKm(Number($('#sessionDistance').value));
+      }
       showToast('Distancia marcada como confirmada');
     });
     $('#sessionDistance').addEventListener('input', () => {
@@ -1292,6 +1337,14 @@
     $('#nextBlockButton').addEventListener('click', nextBlock);
     $('#prevBlock').addEventListener('click', prevBlock);
     $('#plusThirty').addEventListener('click', addThirty);
+    $('#minusThirty').addEventListener('click', subtractThirty);
+    $('#moreToggle').addEventListener('click', () => {
+      const panel = $('#morePanel');
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      $('#moreToggle').setAttribute('aria-expanded', String(willOpen));
+      if (willOpen) $('#blockList').hidden = false;
+    });
     $('#resetTimer').addEventListener('click', async () => {
       if (hasStarted || getLiveElapsedMs() > 0) {
         const ok = await askConfirm({
@@ -1314,12 +1367,20 @@
       if (!validateCloseStep(step)) return;
       if (step === 1) {
         $('#sessionPrescriptionCompleted').checked = selectedValue('prescriptionDone') === 'yes';
+        if ($('#painYes').checked) {
+          $('#painDetails').hidden = false;
+          showCloseStep(2);
+        } else {
+          showCloseStep(3);
+        }
+        return;
       }
-      showCloseStep(Math.min(4, step + 1));
+      showCloseStep(3);
     });
     $('#closeBack').addEventListener('click', () => {
       const step = Number($('#sessionDialog').dataset.step || '1');
-      showCloseStep(Math.max(1, step - 1));
+      if (step === 3 && !$('#painYes').checked) showCloseStep(1);
+      else showCloseStep(Math.max(1, step - 1));
     });
     $('#restoreHistory').addEventListener('click', () => $('#restoreFile').click());
     $('#restoreFile').addEventListener('change', () => {
