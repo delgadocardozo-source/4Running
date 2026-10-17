@@ -754,12 +754,26 @@
     if (!quiet) showToast('Temporizador reiniciado');
   }
 
-  function ensureAudio() {
-    if (!audioContext) {
+  async function ensureAudio() {
+    try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) audioContext = new AC();
+      if (!AC) {
+        console.error('[pace01] ensure-audio', 'AudioContext no disponible');
+        return null;
+      }
+      if (!audioContext) audioContext = new AC();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      if (audioContext.state !== 'running') {
+        console.error('[pace01] ensure-audio', `estado=${audioContext.state}`);
+        return null;
+      }
+      return audioContext;
+    } catch (error) {
+      console.error('[pace01] ensure-audio', error);
+      return null;
     }
-    if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
   }
 
   function warmSpeech() {
@@ -776,23 +790,31 @@
     } catch { /* speech warm */ }
   }
 
-  function beep(freq = 700, duration = 90) {
-    if (!settings.sound) return;
-    ensureAudio();
-    if (!audioContext) return;
+  async function beep(freq = 700, duration = 90) {
+    if (!settings.sound) return false;
+    const ctx = await ensureAudio();
+    if (!ctx) return false;
     try {
-      const osc = audioContext.createOscillator();
-      const gain = audioContext.createGain();
-      osc.frequency.value = freq;
+      const now = ctx.currentTime;
+      const attack = 0.012;
+      const hold = Math.max(duration / 1000, attack + 0.04);
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
       osc.type = 'sine';
-      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.16, audioContext.currentTime + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + duration / 1000);
+      osc.frequency.setValueAtTime(freq, now);
+      // Valores > 0: exponentialRamp falla con 0 exacto.
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.28, now + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + hold);
       osc.connect(gain);
-      gain.connect(audioContext.destination);
-      osc.start();
-      osc.stop(audioContext.currentTime + duration / 1000 + 0.02);
-    } catch { /* audio */ }
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + hold + 0.03);
+      return true;
+    } catch (error) {
+      console.error('[pace01] beep', error);
+      return false;
+    }
   }
 
   function playChangeTone(block) {
@@ -1089,16 +1111,23 @@
     }
   }
 
-  function testAlerts() {
+  async function testAlerts() {
     try {
-      ensureAudio();
       if (!settings.sound && !settings.voice) {
         showToast('Activá sonido o voz para probar.');
         return;
       }
-      if (settings.sound) beep(880, 140);
+      if (settings.sound) {
+        const ok = await beep(880, 200);
+        if (!ok) {
+          showToast('No se pudo activar el audio. Tocá de nuevo o revisá el silencio del teléfono.');
+          return;
+        }
+      }
       if (settings.voice) speak('Alertas listas.');
-      showToast('Si no escuchaste nada, revisá el silencio del teléfono.');
+      showToast(settings.sound
+        ? 'Sonido de prueba enviado. Si no lo oís, revisá el silencio del teléfono.'
+        : 'Voz de prueba enviada.');
     } catch (error) {
       console.error('[pace01] test-alerts', error);
       showToast('No se pudieron probar las alertas');
@@ -1654,13 +1683,13 @@
   function initEvents() {
     $$('[data-nav]').forEach(el => el.addEventListener('click', () => navTo(el.dataset.nav)));
 
-    $('#startWorkoutHome').addEventListener('click', () => {
+    $('#startWorkoutHome').addEventListener('click', async () => {
       const focus = Coach().getFocusSession(plan);
       if (focus?.kind !== 'run') {
         showToast('Hoy no hay intervalos para iniciar.');
         return;
       }
-      ensureAudio();
+      await ensureAudio();
       warmSpeech();
       if (!hasStarted) resetTimer({ quiet: true });
       if (settings.lastEnvironment) setSessionEnvironment(settings.lastEnvironment);
@@ -1674,12 +1703,12 @@
     $$('[data-env]').forEach(btn => {
       btn.addEventListener('click', () => setSessionEnvironment(btn.dataset.env));
     });
-    $('#beginWorkout').addEventListener('click', () => {
+    $('#beginWorkout').addEventListener('click', async () => {
       if (!sessionEnvironment) {
         showToast('Elegí cinta o aire libre antes de comenzar');
         return;
       }
-      ensureAudio();
+      await ensureAudio();
       warmSpeech();
       startTimer({ announceFirst: true });
     });
@@ -1844,11 +1873,14 @@
       restoreSessions(file);
     });
     $('#keepAwake').addEventListener('click', toggleWakeLock);
-    $('#toggleAudio').addEventListener('click', () => {
+    $('#toggleAudio').addEventListener('click', async () => {
       settings.sound = !settings.sound;
       persistSettings();
       syncToggleButtons();
-      if (settings.sound) beep(700, 80);
+      if (settings.sound) {
+        const ok = await beep(700, 120);
+        if (!ok) showToast('No se pudo activar el audio. Tocá de nuevo.');
+      }
     });
     $('#toggleVoice').addEventListener('click', () => {
       settings.voice = !settings.voice;
