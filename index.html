@@ -79,6 +79,7 @@
           <p class="schedule-note" id="scheduleNote" hidden></p>
           <button class="primary-button today-start" id="startWorkoutHome" type="button">Iniciar entrenamiento</button>
           <button class="text-button today-preview" id="previewWorkout" type="button">Ver bloques</button>
+          <aside class="home-adapt" id="homeAdaptNote" hidden></aside>
         </div>
 
         <div id="todayRest" hidden>
@@ -137,6 +138,13 @@
           <p class="eyebrow" id="trainEyebrow">Hoy</p>
           <h1 id="trainTitle">Listo para entrenar</h1>
           <p class="lead" id="trainMeta">Verificá que todo esté funcionando antes de empezar.</p>
+          <div class="env-picker" id="envPicker">
+            <p class="step-question">¿Dónde vas a entrenar hoy?</p>
+            <div class="env-choices">
+              <button type="button" class="env-choice" data-env="outdoor">Aire libre</button>
+              <button type="button" class="env-choice" data-env="treadmill">Cinta</button>
+            </div>
+          </div>
           <ul class="prep-list">
             <li>
               <button type="button" class="check-line" id="prepSound">
@@ -175,6 +183,7 @@
           <h1 class="timer-phase" id="timerPhase">Calentar</h1>
           <p class="timer-value" id="timerValue">05:00</p>
           <p class="timer-speed" id="timerSpeed">5,0 km/h</p>
+          <div class="timer-effort" id="timerEffort" hidden></div>
           <p class="extra-note" id="blockExtraNote" hidden></p>
           <div class="next-block" id="nextBlock">
             <span>Siguiente</span>
@@ -365,10 +374,10 @@
         </div>
         <div class="form-grid two">
           <label>Fecha<input type="date" id="sessionDate"></label>
-          <label>Tipo
+          <label>Realizado en
             <select id="sessionType">
               <option value="Cinta">Cinta</option>
-              <option value="Exterior">Exterior</option>
+              <option value="Exterior">Aire libre</option>
             </select>
           </label>
           <label>Tiempo<input type="text" id="sessionTime" placeholder="38:12"></label>
@@ -420,6 +429,42 @@
       <div class="modal-actions">
         <button class="quiet-button" type="button" data-close-dialog>Cancelar</button>
         <button class="primary-button accent-button" type="submit" id="saveSpeeds">Aplicar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="adaptDialog" class="modal">
+    <form method="dialog" class="modal-card adapt-card">
+      <p class="eyebrow" id="adaptEyebrow">Entrenamiento completado</p>
+      <div class="finish-stats adapt-stats">
+        <div><span>Tiempo</span><strong id="adaptTime">—</strong></div>
+        <div><span>Distancia</span><strong id="adaptDistance">—</strong></div>
+        <div><span>Esfuerzo</span><strong id="adaptEffort">—</strong><small id="adaptEffortNote"></small></div>
+      </div>
+      <p class="adapt-place" id="adaptPlace"></p>
+      <p class="metric-label">Lo que haremos ahora</p>
+      <div class="adapt-action" id="adaptAction"></div>
+      <p class="metric-label">Próximo entrenamiento</p>
+      <p class="adapt-next" id="adaptNext"></p>
+      <p class="field-hint" id="adaptHint"></p>
+      <div class="modal-actions">
+        <button class="primary-button accent-button" type="button" id="adaptDone">Entendido</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="historyDetailDialog" class="modal">
+    <form method="dialog" class="modal-card">
+      <div class="modal-heading">
+        <div>
+          <span class="eyebrow">Detalle</span>
+          <h2 id="historyDetailTitle">Sesión</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+      </div>
+      <div id="historyDetailBody" class="detail-list"></div>
+      <div class="modal-actions">
+        <button class="primary-button accent-button" type="submit" value="ok">Cerrar</button>
       </div>
     </form>
   </dialog>
