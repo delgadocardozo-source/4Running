@@ -1,4 +1,4 @@
-const CACHE = 'pace01-v1.6.0';
+const CACHE = 'pace01-v1.7.0';
 const ASSETS = [
   './',
   './index.html',
@@ -31,6 +31,24 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  // JS/CSS/HTML: red primero para no quedar atrapados en un beep roto.
+  const networkFirst = /\.(?:js|css|html|webmanifest)$/.test(url.pathname)
+    || url.pathname.endsWith('/')
+    || url.pathname.endsWith('/index.html');
+
+  if (networkFirst) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.ok && response.type !== 'opaque') {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then(hit => hit || caches.match('./index.html')))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then(hit => {
