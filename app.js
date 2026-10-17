@@ -31,6 +31,7 @@
   let deferredInstallPrompt = null;
   let wakeLock = null;
   let audioContext = null;
+  let audioUnlocked = false;
   let countdownBeepsFired = new Set();
   let finishedAnnounced = false;
   let hasStarted = false;
@@ -776,6 +777,113 @@
     }
   }
 
+  /** Desbloquea WebAudio en el gesto del usuario (crítico en iOS/PWA). */
+  async function unlockAudio() {
+    const ctx = await ensureAudio();
+    if (!ctx) return false;
+    if (audioUnlocked) return true;
+    try {
+      const silent = ctx.createBuffer(1, 1, ctx.sampleRate || 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = silent;
+      src.connect(ctx.destination);
+      src.start(0);
+      audioUnlocked = true;
+      return true;
+    } catch (error) {
+      console.error('[pace01] unlock-audio', error);
+      return false;
+    }
+  }
+
+  function createBeepBuffer(ctx, freq, durationSec, peak = 0.45) {
+    const rate = ctx.sampleRate || 22050;
+    const length = Math.max(1, Math.floor(rate * durationSec));
+    const buffer = ctx.createBuffer(1, length, rate);
+    const data = buffer.getChannelData(0);
+    const attack = Math.min(0.02, durationSec / 4);
+    const release = Math.min(0.05, durationSec / 3);
+    for (let i = 0; i < length; i += 1) {
+      const t = i / rate;
+      const envAttack = Math.min(1, t / attack);
+      const envRelease = Math.min(1, Math.max(0, (durationSec - t) / release));
+      // Dos parciales: más audible en parlantes chicos que un seno puro.
+      const sample = Math.sin(2 * Math.PI * freq * t) * 0.7
+        + Math.sin(2 * Math.PI * freq * 2 * t) * 0.3;
+      data[i] = sample * peak * envAttack * envRelease;
+    }
+    return buffer;
+  }
+
+  function buildBeepWavDataUri(freq = 880, durationMs = 180, peak = 0.55) {
+    const sampleRate = 22050;
+    const samples = Math.max(1, Math.floor(sampleRate * durationMs / 1000));
+    const dataSize = samples * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+    const durationSec = durationMs / 1000;
+    const attack = Math.min(0.02, durationSec / 4);
+    const release = Math.min(0.05, durationSec / 3);
+    for (let i = 0; i < samples; i += 1) {
+      const t = i / sampleRate;
+      const envAttack = Math.min(1, t / attack);
+      const envRelease = Math.min(1, Math.max(0, (durationSec - t) / release));
+      const sample = Math.sin(2 * Math.PI * freq * t) * 0.7
+        + Math.sin(2 * Math.PI * freq * 2 * t) * 0.3;
+      const value = Math.max(-1, Math.min(1, sample * peak * envAttack * envRelease));
+      view.setInt16(44 + i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+    }
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return `data:audio/wav;base64,${btoa(binary)}`;
+  }
+
+  async function beepHtml(freq = 700, duration = 90) {
+    const uri = buildBeepWavDataUri(freq, Math.max(duration, 120), 0.6);
+    const audio = new Audio(uri);
+    audio.volume = 1;
+    await audio.play();
+    return true;
+  }
+
+  async function beepWeb(freq = 700, duration = 90) {
+    const ctx = await ensureAudio();
+    if (!ctx) return false;
+    await unlockAudio();
+    const hold = Math.max(duration / 1000, 0.08);
+    const src = ctx.createBufferSource();
+    src.buffer = createBeepBuffer(ctx, freq, hold, 0.5);
+    src.connect(ctx.destination);
+    src.start();
+    return true;
+  }
+
+  function pulseHaptic() {
+    try {
+      if (navigator.vibrate) navigator.vibrate([35, 40, 35]);
+    } catch { /* vibrate */ }
+  }
+
   function warmSpeech() {
     if (!('speechSynthesis' in window)) return;
     try {
@@ -792,29 +900,21 @@
 
   async function beep(freq = 700, duration = 90) {
     if (!settings.sound) return false;
-    const ctx = await ensureAudio();
-    if (!ctx) return false;
+    let ok = false;
     try {
-      const now = ctx.currentTime;
-      const attack = 0.012;
-      const hold = Math.max(duration / 1000, attack + 0.04);
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now);
-      // Valores > 0: exponentialRamp falla con 0 exacto.
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.28, now + attack);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + hold);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + hold + 0.03);
-      return true;
+      ok = await beepWeb(freq, duration);
     } catch (error) {
-      console.error('[pace01] beep', error);
-      return false;
+      console.error('[pace01] beep-web', error);
     }
+    // Fallback HTMLAudio: varios móviles (sobre todo PWA iOS) silencian osciladores.
+    try {
+      await beepHtml(freq, duration);
+      ok = true;
+    } catch (error) {
+      console.error('[pace01] beep-html', error);
+    }
+    if (ok) pulseHaptic();
+    return ok;
   }
 
   function playChangeTone(block) {
@@ -1117,16 +1217,18 @@
         showToast('Activá sonido o voz para probar.');
         return;
       }
+      await unlockAudio();
+      warmSpeech();
       if (settings.sound) {
-        const ok = await beep(880, 200);
+        const ok = await beep(880, 260);
         if (!ok) {
-          showToast('No se pudo activar el audio. Tocá de nuevo o revisá el silencio del teléfono.');
+          showToast('No se pudo activar el audio. Tocá de nuevo. En iPhone, desactivá el silencio lateral.');
           return;
         }
       }
       if (settings.voice) speak('Alertas listas.');
       showToast(settings.sound
-        ? 'Sonido de prueba enviado. Si no lo oís, revisá el silencio del teléfono.'
+        ? 'Sonido enviado. Si no lo oís: volumen medio y desactivá el silencio del teléfono.'
         : 'Voz de prueba enviada.');
     } catch (error) {
       console.error('[pace01] test-alerts', error);
@@ -1917,7 +2019,17 @@
   async function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     try {
-      await navigator.serviceWorker.register(new URL('sw.js', window.location.href), { scope: './' });
+      const reg = await navigator.serviceWorker.register(
+        new URL('sw.js', window.location.href),
+        { scope: './', updateViaCache: 'none' }
+      );
+      reg.update().catch(() => {});
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
     } catch { /* */ }
   }
 
