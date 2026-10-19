@@ -1058,6 +1058,31 @@
   }
 
   /**
+   * Limpia recuperaciones voluntarias registradas el mismo día que un entrenamiento.
+   * Caso típico: se entrenó y después se tocó “Recuperación” por error.
+   */
+  function purgeInvalidSameDayRecoveries(logs = []) {
+    const list = Array.isArray(logs) ? logs.slice() : [];
+    const trainingDates = new Set(
+      list
+        .filter(l => l && l.date && !isRecoveryLog(l) && l.execution !== 'skipped')
+        .map(l => l.date)
+    );
+    const kept = [];
+    const removed = [];
+    for (const log of list) {
+      const accidental =
+        log &&
+        trainingDates.has(log.date) &&
+        log.kind !== 'recovery-gate' &&
+        (log.voluntary === true || (log.source === 'rest' && log.type === 'Recuperación'));
+      if (accidental) removed.push(log);
+      else kept.push(log);
+    }
+    return { logs: kept, removed };
+  }
+
+  /**
    * Día sin correr elegido por la persona, con una sesión de intervalos todavía abierta.
    * Registra recuperación y no cierra el PlanItem ni avanza la secuencia.
    * No permite registrar recuperación el mismo día en que ya hay un entrenamiento.
@@ -1160,6 +1185,7 @@
     hasTrainingOnDate,
     hasRecoveryOnDate,
     isRecoveryLog,
+    purgeInvalidSameDayRecoveries,
     skipFocus,
     rescheduleFocus,
     planStats,
