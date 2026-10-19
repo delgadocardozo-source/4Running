@@ -1,0 +1,156 @@
+[
+  {
+    "date": "2026-07-01",
+    "prescribed": "2 min correr / 2 min caminar Ã—7",
+    "continuous": 120,
+    "totalRun": 840,
+    "walk": 840,
+    "reps": 7,
+    "totalMin": 38,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 3,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "2:30 correr / 2 min caminar Ã—6",
+    "diff": "Bloque continuo: +30 s (2 min â†’ 2:30) Â· Repeticiones: 7 â†’ 6 Â· Carrera acumulada: 14 min â†’ 15 min Â· Tiempo total: 38 â†’ 37 min",
+    "interpretation": "Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.",
+    "reason": "Buena tolerancia: aumentamos una dimensiÃ³n de carga con lÃ­mite conservador.",
+    "scheduled": "2026-10-21"
+  },
+  {
+    "date": "2026-07-04",
+    "prescribed": "2:30 correr / 2 min caminar Ã—6",
+    "continuous": 150,
+    "totalRun": 900,
+    "walk": 720,
+    "reps": 6,
+    "totalMin": 37,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 4,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "3 min correr / 2 min caminar Ã—5",
+    "diff": "Bloque continuo: +30 s (2:30 â†’ 3 min) Â· Repeticiones: 6 â†’ 5 Â· Tiempo total: 37 â†’ 35 min",
+    "interpretation": "Priorizamos resistencia continua; el volumen acumulado se mantiene estable.",
+    "reason": "Tolerancia adecuada y tendencia favorable: progresamos.",
+    "scheduled": "2026-10-27"
+  },
+  {
+    "date": "2026-07-07",
+    "prescribed": "3 min correr / 2 min caminar Ã—5",
+    "continuous": 180,
+    "totalRun": 900,
+    "walk": 600,
+    "reps": 5,
+    "totalMin": 35,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 3,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "3:30 correr / 2 min caminar Ã—4",
+    "diff": "Bloque continuo: +30 s (3 min â†’ 3:30) Â· Repeticiones: 5 â†’ 4 Â· Carrera acumulada: 15 min â†’ 14 min Â· Tiempo total: 35 â†’ 32 min",
+    "interpretation": "Aumentamos el tiempo de carrera continua y reducimos ligeramente el volumen acumulado para equilibrar la exigencia. No es una pÃ©rdida de rendimiento.",
+    "reason": "Buena tolerancia: aumentamos una dimensiÃ³n de carga con lÃ­mite conservador.",
+    "scheduled": "2026-11-02"
+  },
+  {
+    "date": "2026-07-10",
+    "prescribed": "3:30 correr / 2 min caminar Ã—4",
+    "continuous": 210,
+    "totalRun": 840,
+    "walk": 480,
+    "reps": 4,
+    "totalMin": 32,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 4,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "4 min correr / 2 min caminar Ã—4",
+    "diff": "Bloque continuo: +30 s (3:30 â†’ 4 min) Â· Carrera acumulada: 14 min â†’ 16 min Â· Tiempo total: 32 â†’ 34 min",
+    "interpretation": "Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.",
+    "reason": "Tolerancia adecuada y tendencia favorable: progresamos.",
+    "scheduled": "2026-11-08"
+  },
+  {
+    "date": "2026-07-13",
+    "prescribed": "4 min correr / 2 min caminar Ã—4",
+    "continuous": 240,
+    "totalRun": 960,
+    "walk": 480,
+    "reps": 4,
+    "totalMin": 34,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 3,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "4:30 correr / 2 min caminar Ã—4",
+    "diff": "Bloque continuo: +30 s (4 min â†’ 4:30) Â· Carrera acumulada: 16 min â†’ 18 min Â· Tiempo total: 34 â†’ 36 min",
+    "interpretation": "Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.",
+    "reason": "Buena tolerancia: aumentamos una dimensiÃ³n de carga con lÃ­mite conservador.",
+    "scheduled": "2026-11-14"
+  },
+  {
+    "date": "2026-07-16",
+    "prescribed": "4:30 correr / 2 min caminar Ã—4",
+    "continuous": 270,
+    "totalRun": 1080,
+    "walk": 480,
+    "reps": 4,
+    "totalMin": 36,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 4,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "5 min correr / 2 min caminar Ã—4",
+    "diff": "Bloque continuo: +30 s (4:30 â†’ 5 min) Â· Carrera acumulada: 18 min â†’ 20 min Â· Tiempo total: 36 â†’ 38 min",
+    "interpretation": "Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.",
+    "reason": "Tolerancia adecuada y tendencia favorable: progresamos.",
+    "scheduled": "2026-11-20"
+  },
+  {
+    "date": "2026-07-19",
+    "prescribed": "5 min correr / 2 min caminar Ã—4",
+    "continuous": 300,
+    "totalRun": 1200,
+    "walk": 480,
+    "reps": 4,
+    "totalMin": 38,
+    "speeds": {
+      "run": 7.5,
+      "walk": 5,
+      "cool": 4.5
+    },
+    "rpe": 3,
+    "completed": true,
+    "action": "progress_continuous",
+    "next": "5:30 correr / 2 min caminar Ã—4",
+    "diff": "Bloque continuo: +30 s (5 min â†’ 5:30) Â· Carrera acumulada: 20 min â†’ 22 min Â· Tiempo total: 38 â†’ 40 min",
+    "interpretation": "Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.",
+    "reason": "Buena tolerancia: aumentamos una dimensiÃ³n de carga con lÃ­mite conservador.",
+    "scheduled": "2026-11-26"
+  }
+]

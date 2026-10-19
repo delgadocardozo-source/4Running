@@ -228,7 +228,7 @@ function simulateProfile(label, rpeFn, opts = {}) {
 console.log('\n=== Perfil A: buena evolución ===');
 const Ares = simulateProfile('A', (i) => (i % 2 === 0 ? 3 : 4), { sessions: 6 });
 assert(Ares.rows.length >= 4, 'A genera varias sesiones');
-const aProgress = Ares.rows.filter(r => r.action === 'progress');
+const aProgress = Ares.rows.filter(r => String(r.action).startsWith('progress'));
 assert(aProgress.length >= 1, 'A progresa al menos una vez');
 const aLoadChanged = Ares.rows.some(r => r.continuous !== START.runSeconds || r.reps !== START.reps)
   || Ares.rows.some(r => r.next && r.next !== r.prescribed && r.action === 'progress');
@@ -253,8 +253,9 @@ const aLast = Ares.rows[Ares.rows.length - 1];
 const bLast = Bres.rows[Bres.rows.length - 1];
 assert(Ares.rows[0].prescribed === Bres.rows[0].prescribed, 'A y B parten de la misma prescripción');
 const aChanged = Ares.rows.some(r => r.continuous !== START.runSeconds || r.reps !== START.reps);
-const bSameish = Bres.rows.filter(r => r.action === 'progress').length < Ares.rows.filter(r => r.action === 'progress').length;
-assert(bSameish || !Bres.rows.some(r => r.action === 'progress'), 'B progresa menos que A');
+const bSameish = Bres.rows.filter(r => String(r.action).startsWith('progress')).length
+  < Ares.rows.filter(r => String(r.action).startsWith('progress')).length;
+assert(bSameish || !Bres.rows.some(r => String(r.action).startsWith('progress')), 'B progresa menos que A');
 assert(aChanged || aProgress.length >= 1, 'A evoluciona la carga');
 
 console.log('\n=== Perfil C: irregular ===');
