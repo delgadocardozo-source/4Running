@@ -99,7 +99,9 @@
     ];
     for (let i = 1; i <= st.reps; i++) {
       blocks.push({ type: 'run', label: 'Correr', seconds: st.runSeconds, rep: i, cue: 'Correr' });
-      blocks.push({ type: 'walk', label: 'Caminar', seconds: st.walkSeconds, rep: i, cue: 'Caminar' });
+      if (Number(st.walkSeconds) > 0) {
+        blocks.push({ type: 'walk', label: 'Caminar', seconds: st.walkSeconds, rep: i, cue: 'Caminar' });
+      }
     }
     blocks.push({ type: 'cool', label: 'Enfriar', seconds: st.coolSeconds, cue: 'Enfriar' });
     return blocks.map(block => ({
@@ -129,9 +131,10 @@
   }
 
   function estimateStructureKm(st) {
+    const walkSec = Number(st.walkSeconds) || 0;
     const km = (settings.walkSpeed * st.warmSeconds
       + settings.coolSpeed * st.coolSeconds
-      + (settings.runSpeed * st.runSeconds + settings.walkSpeed * st.walkSeconds) * st.reps) / 3600;
+      + (settings.runSpeed * st.runSeconds + settings.walkSpeed * walkSec) * st.reps) / 3600;
     return km;
   }
 
@@ -1003,6 +1006,7 @@
 
   function decisionUserCopy(entry) {
     const progression = entry?.progression;
+    const action = entry?.adaptiveAction || entry?.action;
     const codes = entry?.reasonCode || [];
     const rpe = entry?.rpe;
     if (entry?.source === 'external') {
@@ -1021,7 +1025,7 @@
         chips: ['Recuperación']
       };
     }
-    if (progression === 'recovery' || codes.includes('SAFETY_OVERRIDE') || codes.includes('PAIN_MODERATE')) {
+    if (progression === 'recovery' || action === 'recovery' || codes.includes('SAFETY_OVERRIDE') || codes.includes('PAIN_MODERATE')) {
       return {
         cls: 'recovery',
         title: 'Recuperación',
@@ -1037,18 +1041,42 @@
         chips: []
       };
     }
-    if (progression === 'advance') {
+    if (action === 'consolidate' || codes.includes('RPE_MID_CONSOLIDATE') || codes.includes('LOW_EVIDENCE')) {
       return {
         cls: 'advance',
-        title: 'Próximo paso: avanzar',
-        summary: 'Completaste la sesión con una intensidad adecuada y sin señales que indiquen mantener la carga.',
+        title: 'Consolidar',
+        summary: 'Mantenemos la misma carga para consolidar tolerancia. No es un aumento.',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Consolidar'] : ['Consolidar']
+      };
+    }
+    if (action === 'reduce' || codes.includes('RPE_VERY_HIGH')) {
+      return {
+        cls: 'repeat',
+        title: 'Reducir carga',
+        summary: 'Bajamos una variable de dificultad para recuperar tolerancia.',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Reducir'] : ['Reducir']
+      };
+    }
+    if (action === 'reassess') {
+      return {
+        cls: 'repeat',
+        title: 'Reevaluar',
+        summary: 'Tras una pausa, recalibramos el punto de partida sin borrar tu historial.',
+        chips: ['Reevaluar']
+      };
+    }
+    if (progression === 'advance' || action === 'progress') {
+      return {
+        cls: 'advance',
+        title: 'Progresar',
+        summary: 'Completaste la sesión con buena tolerancia. El próximo estímulo ajusta una variable de carga con límite conservador.',
         chips: rpe != null ? [`Esfuerzo ${rpe}/10`] : []
       };
     }
-    if (progression === 'repeat') {
-      const high = Number(rpe) >= 7 || codes.includes('RPE_GE_7');
+    if (progression === 'repeat' || action === 'repeat') {
+      const high = Number(rpe) >= 7 || codes.includes('RPE_GE_7') || codes.includes('RPE_HIGH');
       const incomplete = codes.includes('PRESCRIPTION_INCOMPLETE');
-      const lowConf = codes.includes('LOW_CONFIDENCE');
+      const lowConf = codes.includes('LOW_CONFIDENCE') || codes.includes('LOW_EVIDENCE');
       let summary = 'Mantendremos este nivel antes de aumentar la carga.';
       if (incomplete) summary = 'La prescripción no se completó. Un esfuerzo bajo no alcanza para avanzar.';
       else if (high) summary = 'El entrenamiento resultó más exigente de lo esperado. Mantendremos este nivel antes de aumentar la carga.';
@@ -1060,7 +1088,7 @@
       if (incomplete) chips.push('Incompleto');
       return {
         cls: 'repeat',
-        title: 'Próximo paso: repetir sesión',
+        title: 'Repetir',
         summary,
         chips
       };
@@ -1112,34 +1140,56 @@
   function adaptationCopy(result, log) {
     const decision = result?.decision || {
       progression: log?.progression,
-      reasonCode: log?.reasonCode || []
+      reasonCode: log?.reasonCode || [],
+      action: result?.action,
+      adaptiveAction: result?.action
     };
-    const copy = decisionUserCopy({ ...log, progression: decision.progression, reasonCode: decision.reasonCode || log?.reasonCode });
+    const copy = decisionUserCopy({
+      ...log,
+      progression: decision.progression,
+      reasonCode: decision.reasonCode || log?.reasonCode,
+      action: decision.adaptiveAction || decision.action || result?.action,
+      adaptiveAction: decision.adaptiveAction || decision.action || result?.action
+    });
     const next = result?.next || Coach().getFocusSession(plan);
+    const nextRun = next?.kind === 'run'
+      ? next
+      : Coach().sortedPlanSessions(plan).find(s => (s.status === 'pending' || s.status === 'rescheduled') && s.kind === 'run');
     let nextLine = '';
-    if (next?.kind === 'run' && next.structure) {
-      const st = next.structure;
-      nextLine = `Intervalos · ${formatMinutesLabel(st.runSeconds)} correr / ${formatMinutesLabel(st.walkSeconds)} caminar · ${st.reps} repeticiones`;
+    if (nextRun?.structure) {
+      const st = nextRun.structure;
+      if (!st.walkSeconds) {
+        nextLine = `Carrera continua · ${formatMinutesLabel(st.runSeconds)}`;
+      } else {
+        nextLine = `${formatMinutesLabel(st.runSeconds)} correr / ${formatMinutesLabel(st.walkSeconds)} caminar ×${st.reps}`;
+      }
     } else if (next?.kind === 'rest') {
       nextLine = 'Recuperación en el plan';
     } else {
       nextLine = 'Sin sesión pendiente';
     }
+    const expl = result?.explanation;
     let headline = copy.title;
-    let body = copy.summary;
-    if (decision.progression === 'advance') {
-      headline = 'Vamos a avanzar';
-      body = 'Completaste el entrenamiento con buena tolerancia. El próximo entrenamiento aumentará ligeramente la carga.';
-    } else if (decision.progression === 'repeat') {
-      headline = Number(log?.rpe) >= 7 ? 'Mantendremos este nivel' : copy.title.replace(/^Próximo paso:\s*/i, '') || 'Mantendremos este nivel';
-      if (Number(log?.rpe) >= 7) {
-        body = 'El esfuerzo fue mayor al esperado. Por ahora no aumentaremos la carga.';
-      }
-    } else if (decision.progression === 'recovery') {
-      headline = 'Recuperación';
-      body = 'El plan principal no avanzó. Priorizamos recuperar antes de volver a la misma sesión.';
+    let body = decision.reason || copy.summary;
+    if (expl?.actionLabel) headline = expl.actionLabel;
+    if (expl?.sameLoad && (decision.adaptiveAction === 'consolidate' || decision.action === 'consolidate')) {
+      headline = 'Consolidar';
+      body = decision.reason || 'Misma carga: consolidamos tolerancia.';
     }
-    return { headline, body, nextLine, cls: copy.cls, chips: copy.chips };
+    const changeLines = (expl?.lines || []).map(l => l.text);
+    const previousLine = expl?.previous || (result?.previousStructure
+      ? Coach().describeStructure(result.previousStructure)
+      : '');
+    return {
+      headline,
+      body,
+      nextLine,
+      previousLine,
+      changeLines,
+      cls: copy.cls,
+      chips: copy.chips,
+      action: decision.adaptiveAction || decision.action || result?.action
+    };
   }
 
   async function requestWakeLock() {
@@ -1411,11 +1461,15 @@
       $('#homeWarmDur').textContent = formatMinutesLabel(st.warmSeconds);
       $('#homeWarmLine').textContent = 'Calentamiento';
       $('#homeWarmSpeed').textContent = speedLabel(settings.walkSpeed);
-      $('#homeReps').textContent = `${st.reps}×`;
+      $('#homeReps').textContent = Number(st.walkSeconds) > 0 ? `${st.reps}×` : '1×';
       $('#homeWorkLine').textContent = `Correr ${cue(st.runSeconds)}`;
-      $('#homeWalkLine').textContent = `Caminar ${cue(st.walkSeconds)}`;
+      $('#homeWalkLine').textContent = Number(st.walkSeconds) > 0
+        ? `Caminar ${cue(st.walkSeconds)}`
+        : 'Carrera continua';
       $('#homeRunSpeed').textContent = speedLabel(settings.runSpeed);
-      $('#homeWalkSpeed').textContent = speedLabel(settings.walkSpeed);
+      $('#homeWalkSpeed').textContent = Number(st.walkSeconds) > 0
+        ? speedLabel(settings.walkSpeed)
+        : '—';
       $('#homeCoolDur').textContent = formatMinutesLabel(st.coolSeconds);
       $('#homeCoolLine').textContent = 'Enfriamiento';
       $('#homeCoolSpeed').textContent = speedLabel(settings.coolSpeed);
@@ -1425,16 +1479,32 @@
     if (adaptNote) {
       const ctx = lastFocusDecision();
       if (isRun && ctx?.attempt) {
-        const copy = decisionUserCopy({ ...(ctx.log || {}), progression: ctx.attempt.progression, reasonCode: ctx.attempt.reasonCode, rpe: ctx.attempt.rpe });
-        if (ctx.attempt.progression === 'repeat') {
+        const copy = decisionUserCopy({
+          ...(ctx.log || {}),
+          progression: ctx.attempt.progression,
+          reasonCode: ctx.attempt.reasonCode,
+          rpe: ctx.attempt.rpe,
+          action: ctx.attempt.adaptiveAction || ctx.attempt.action,
+          adaptiveAction: ctx.attempt.adaptiveAction || ctx.attempt.action
+        });
+        const act = ctx.attempt.adaptiveAction || ctx.attempt.action;
+        if (ctx.attempt.progression === 'repeat' || act === 'repeat') {
           adaptNote.hidden = false;
-          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Mantenemos esta sesión</strong><em>${escapeHtml(Number(ctx.attempt.rpe) >= 7 ? 'La anterior resultó muy exigente.' : copy.summary)}</em>`;
-        } else if (ctx.attempt.progression === 'recovery') {
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Repetir</strong><em>${escapeHtml(Number(ctx.attempt.rpe) >= 7 ? 'La anterior resultó muy exigente.' : copy.summary)}</em>`;
+        } else if (ctx.attempt.progression === 'recovery' || act === 'recovery') {
           adaptNote.hidden = false;
-          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Seguís en la misma sesión</strong><em>La recuperación no avanzó el plan.</em>`;
-        } else if (ctx.attempt.progression === 'advance' && lastSaveResult?.progression === 'advance') {
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Recuperación</strong><em>La recuperación no avanzó el plan.</em>`;
+        } else if (act === 'consolidate') {
           adaptNote.hidden = false;
-          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Avanzamos</strong><em>Completaste bien la sesión anterior.</em>`;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Consolidar</strong><em>${escapeHtml(copy.summary)}</em>`;
+        } else if (act === 'reduce') {
+          adaptNote.hidden = false;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Reducir carga</strong><em>${escapeHtml(copy.summary)}</em>`;
+        } else if (ctx.attempt.progression === 'advance' || act === 'progress') {
+          const expl = lastSaveResult?.explanation;
+          const change = expl?.summary || copy.summary;
+          adaptNote.hidden = false;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>${escapeHtml(act === 'progress' ? 'Progresar' : copy.title || 'Progresar')}</strong><em>${escapeHtml(change)}</em>`;
         } else {
           adaptNote.hidden = true;
           adaptNote.innerHTML = '';
@@ -1502,6 +1572,26 @@
 
     const external = $('#sessionExternal').value === '1';
     const fromTimer = $('#sessionFromTimer').value === '1';
+    if (fromTimer && !$('#sessionTimeConfirmed')?.checked) {
+      const measured = formatTime(elapsedMs / 1000);
+      const manual = $('#sessionTime').value.trim();
+      if (manual && measured && manual !== measured) {
+        const toSec = (t) => {
+          const p = String(t).split(':').map(Number);
+          if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+          if (p.length === 2) return p[0] * 60 + p[1];
+          return Number(t) || 0;
+        };
+        const delta = Math.abs(toSec(manual) - toSec(measured));
+        if (delta >= 60) {
+          const ok = window.confirm(`El tiempo manual (${manual}) difiere del cronómetro (${measured}) en ${Math.round(delta)} s. ¿Confirmás la corrección?`);
+          if (!ok) {
+            showCloseStep(3);
+            return;
+          }
+        }
+      }
+    }
     const date = $('#sessionDate').value || localDateISO();
     const id = `${date}-${Date.now()}`;
     const prescriptionCompleted = done === 'yes';
@@ -1592,13 +1682,24 @@
     $('#adaptPlace').textContent = `Realizado en: ${environmentLabel(log.environment)}`;
     const action = $('#adaptAction');
     action.className = `adapt-action ${adapt.cls}`;
-    action.innerHTML = `<strong>${escapeHtml(adapt.headline)}</strong><p>${escapeHtml(adapt.body)}</p>`;
+    const changeHtml = (adapt.changeLines || []).length
+      ? `<ul class="adapt-changes">${adapt.changeLines.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+      : '';
+    const prevHtml = adapt.previousLine
+      ? `<p class="adapt-prev"><span>Anterior</span> ${escapeHtml(adapt.previousLine)}</p>`
+      : '';
+    action.innerHTML = `<strong>${escapeHtml(adapt.headline)}</strong><p>${escapeHtml(adapt.body)}</p>${prevHtml}${changeHtml}`;
     $('#adaptNext').textContent = adapt.nextLine;
-    $('#adaptHint').textContent = result.progression === 'advance'
-      ? 'Queremos ver cómo responde tu cuerpo con el siguiente estímulo.'
-      : result.progression === 'repeat'
-        ? 'Queremos ver cómo responde tu cuerpo antes de aumentar.'
-        : 'Cuando estés listo, volvés a la misma sesión del plan.';
+    const act = adapt.action || result.action;
+    $('#adaptHint').textContent = act === 'progress'
+      ? 'Progresamos una variable con límite conservador. Observá cómo responde el cuerpo.'
+      : act === 'consolidate'
+        ? 'Consolidamos: misma carga o equivalente. No es un aumento.'
+        : act === 'reduce'
+          ? 'Redujimos carga. El historial se conserva.'
+          : result.progression === 'repeat'
+            ? 'Repetimos este estímulo antes de aumentar.'
+            : 'Cuando estés listo, volvés a la misma sesión del plan.';
     if (!dialog.open) dialog.showModal();
   }
 

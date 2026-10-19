@@ -1,62 +1,90 @@
-# PACE/01 — Motor de progresión 5K (spec v1.0 consolidada)
+# PACE/01 — Producto y motor adaptativo v4
 
-Objetivo: progresar con seguridad hacia completar 5 km run/walk.  
-**Listo** = preparado para *intentar finalizar* 5K con run/walk, no correr 5K continuos.
+Entrenador de running por intervalos (PWA). El motor **no** depende de una lista fija de 10 sesiones: genera un horizonte móvil según el perfil funcional del atleta.
 
-## Flujo canónico (prioridad)
-1. Realizar entrenamiento  
-2. Guardar attempt en `attempts[]`  
-3. Overrides de seguridad  
-4. Cumplimiento de prescripción  
-5. Confianza  
-6. RPE  
-7. Tendencia reciente (si RPE = 6)  
-8. Resolver `advance` / `repeat` / `recovery`  
-9. Próxima prescripción  
+## A. Arquitectura
 
-## Ejecución ≠ progresión
-- Ejecución: `completed` | `aborted` | `skipped`  
-- Progresión: `advance` | `repeat` | `recovery`  
-- Cumplimiento = bloques prescritos correr/caminar (no distancia GPS).  
+| Capa | Archivo | Rol |
+|------|---------|-----|
+| Generador + perfil + carga | `adaptive-engine.js` | `PaceAdaptive` — puro, testeable, reloj inyectable |
+| Fachada / persistencia | `coach-engine.js` | `PaceCoach` — localStorage, attempts, API UI |
+| UI / timer | `app.js` | Cierre, adaptación explicable, HUD |
+| Caché PWA | `sw.js` | `pace01-v2.0.0` incluye `adaptive-engine.js` |
 
-## Tendencia reciente favorable
-Últimos **3 intentos válidos** de entrenamiento (incluye repeticiones del mismo PlanItem).  
-**Excluye** intentos/sesiones de recovery.
+Flujo: cierre de sesión → `decideAdaptive` → attempt (ejecución + acción) → si `advance` regenera horizonte pendiente sin reescribir historial.
 
-Favorable cuando:
-1. Al menos **2 de 3** completaron la prescripción  
-2. RPE de los completados **≤ 6**  
-3. Sin dolor progresivo, marcha alterada ni parada forzada  
-4. Sin deterioro sostenido (heurística: RPE +2 o continuo −20% entre primero y último completado de la ventana)  
-5. Confianza **media o alta**  
+Claves: `pace01.plan.v3` (contenido versionado a plan.version=4), `pace01.logs.v3`, `pace01.settings.v1`.
 
-Con **menos de 3** intentos válidos → RPE 6 produce **repeat** por defecto.
+## B. Reglas implementadas
 
-## Matriz RPE + cumplimiento
+Prioridad: **seguridad → cumplimiento → RPE → tendencia → límites de carga**.
 
-| Situación | Resultado |
-|-----------|-----------|
-| Cumplido + RPE ≤5 + sin alertas + confianza ≥ media | **advance** |
-| Cumplido + RPE 6 + tendencia favorable + confianza ≥ media | **advance** |
-| Cumplido + RPE 6 + tendencia no favorable | **repeat** |
-| Cumplido + RPE ≥7 | **repeat** |
-| No completó prescripción + sin alertas | **repeat** |
-| Alerta de seguridad (override) | **recovery** (prioridad máx.) |
-| Confianza baja / datos esenciales incompletos | **repeat** provisional (no advance) |
+Acciones: `progress` | `consolidate` | `repeat` | `reduce` | `recovery` | `reassess`.
 
-## Overrides
-`worseningDuringRun` | `alteredGait` | `forcedStop` | alerta severa → **recovery** + aviso no diagnóstico.
+Compat attempts: `progression` = `advance` | `repeat` | `recovery` + campo `adaptiveAction`.
 
-## Confianza
-- **Alta**: registro completo/coherente  
-- **Media**: esenciales completos, algunos estimados  
-- **Baja**: faltan RPE/cumplimiento/seguridad → no advance ni «Listo»  
+Parámetros propios (`DEFAULT_PARAMS`, configurables en `plan.params`):
 
-## Carga
-Una variable principal por paso; duración/volumen antes que velocidad; exterior cómodo/conversacional.
+- `continuousStepSec`: 30 (mín. 15)
+- `maxRunVolumeIncreasePct`: 15
+- `trendWindow`: 3 / `minGoodSessionsForProgress`: 2
+- `pauseDaysForReassess`: 10
+- `horizonPendingRuns`: 2
+- Una variable principal por transición (continuo / reps / walk), o reorganización continuo+reps si el volumen cabe
 
-## Home
-> Sin dolor y RPE ≤5 confirma una buena tolerancia al entrenamiento. Con RPE 6 miramos la tendencia reciente antes de avanzar.
+## C. Bibliografía y trazabilidad
 
-## Reprogramar
-Mismo `planItemId` + `scheduledDate`; no duplica; no crea attempt ficticio; no avanza.
+| Fuente | Qué usamos | Qué NO atribuimos |
+|--------|------------|-------------------|
+| NHS Couch to 5K | Progresión walk/jog → continuo; ~3 sesiones/sem; consolidación | Calendario fijo de semanas |
+| Jeff Galloway Run-Walk-Run | Alternancia estratégica; no eliminar caminatas solo por mejorar | Ratios propietarios exactos |
+| CDC intensidad | RPE 1–10, talk test / percepción | Umbrales FC obligatorios |
+| Runna (pública) | Plan según capacidad, adaptación, pausas | Algoritmos internos no públicos |
+| BJSM carga | Precaución ante saltos bruscos de distancia/volumen | “Regla del 10%” como ley |
+
+Los números de paso y % son **diseño 4Running**, no garantías clínicas.
+
+## D. Archivos tocados
+
+- `adaptive-engine.js` (nuevo)
+- `coach-engine.js`, `app.js`, `index.html`, `styles.css`, `sw.js`
+- `tests/adaptive-engine.test.js`, `tests/simulation-14d-report.json`
+- `PRODUCT.md`
+
+## E. Migración
+
+`migratePlanToV4` es idempotente: conserva sesiones/attempts, marca `engineVersion`, rellena horizonte si no hay pendientes (corrige “PLAN AL DÍA”). No inventa distancias ni RPE ausentes.
+
+## F. Pruebas
+
+```bash
+node tests/adaptive-engine.test.js
+```
+
+Perfiles A–G + límites de carga + migración. Informe JSON en `tests/simulation-14d-report.json`.
+
+## G. Comparación 14 días (A vs B)
+
+Misma semilla `7×(2'/2')`. A (RPE 3–4) progresa el continuo (p. ej. 2:00 → 2:30×6 → 3:00…). B (RPE 8 / incompletas) repite o reduce reps. Prescripciones divergentes.
+
+## H. Ejemplo generado
+
+Anterior: `2 min correr / 2 min caminar ×7`  
+Nuevo: `2:30 correr / 2 min caminar ×6`  
+Cambio: continuo +30 s; carrera total 14→15 min; duración 38→37 min.
+
+## I. Limitaciones
+
+- Sin GPS: distancia estimada vs confirmada manual.
+- Velocidades de cinta siguen siendo manuales (sugerencia solo con evidencia futura).
+- Etapas 5–6 (tempo/10K) son base; se ampliarán sin romper el generador.
+- No es herramienta diagnóstica médica.
+
+## J. Verificar en UI
+
+1. Recargar (SW `v2.0.0`).
+2. Completar sesión con RPE 3–4 → pantalla de adaptación con **Progresar/Consolidar** y diff.
+3. RPE 7–8 → **Repetir**.
+4. Señal de seguridad → **Recuperación**.
+5. Agotar restos del plan v3 → siguen apareciendo sesiones nuevas.
+6. Historial intacto tras migración.
