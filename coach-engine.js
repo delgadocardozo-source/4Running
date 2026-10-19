@@ -976,7 +976,6 @@
     } else {
       messages.push('Continuidad del plan: se regenerará el horizonte en la próxima carga.');
     }
-    const adaptiveAction = decision.adaptiveAction || decision.action || 'progress';
     return {
       plan,
       message: messages.join(' '),
