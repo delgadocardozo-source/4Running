@@ -2050,6 +2050,21 @@
     }
     plan = Coach().loadPlan();
     logs = Coach().loadLogs();
+    const cleanup = Coach().purgeInvalidSameDayRecoveries(logs);
+    if (cleanup.removed.length) {
+      logs = cleanup.logs;
+      Coach().saveLogs(logs);
+      console.info('[pace01] purged-same-day-recovery', {
+        removed: cleanup.removed.map(l => ({ id: l.id, date: l.date }))
+      });
+      setTimeout(() => {
+        showToast(
+          cleanup.removed.length === 1
+            ? 'Quitamos una recuperación marcada el mismo día que entrenaste.'
+            : `Quitamos ${cleanup.removed.length} recuperaciones duplicadas del mismo día del entrenamiento.`
+        );
+      }, 600);
+    }
     workout = buildWorkout();
     remainingMs = workout[0].seconds * 1000;
     originalBlockMs = remainingMs;
