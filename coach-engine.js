@@ -1032,12 +1032,54 @@
     };
   }
 
+  function isRecoveryLog(log) {
+    return Boolean(
+      log &&
+      (log.voluntary ||
+        log.type === 'Recuperación' ||
+        log.source === 'rest' ||
+        log.kind === 'recovery-gate')
+    );
+  }
+
+  /** Entrenamiento real ese día (intervalos u actividad). No incluye recuperación ni omisiones. */
+  function hasTrainingOnDate(logs = [], date) {
+    if (!date) return false;
+    return (logs || []).some(l =>
+      l.date === date &&
+      !isRecoveryLog(l) &&
+      l.execution !== 'skipped'
+    );
+  }
+
+  function hasRecoveryOnDate(logs = [], date) {
+    if (!date) return false;
+    return (logs || []).some(l => l.date === date && isRecoveryLog(l));
+  }
+
   /**
    * Día sin correr elegido por la persona, con una sesión de intervalos todavía abierta.
    * Registra recuperación y no cierra el PlanItem ni avanza la secuencia.
+   * No permite registrar recuperación el mismo día en que ya hay un entrenamiento.
    */
   function registerVoluntaryRecovery(plan, logs, localDate) {
     try {
+      if (hasTrainingOnDate(logs, localDate)) {
+        return {
+          plan,
+          logs,
+          blocked: true,
+          message: 'Hoy ya registraste un entrenamiento. No hace falta marcar recuperación el mismo día.'
+        };
+      }
+      if (hasRecoveryOnDate(logs, localDate)) {
+        return {
+          plan,
+          logs,
+          blocked: true,
+          message: 'Hoy ya figurás en recuperación. No se crea otro registro.'
+        };
+      }
       const focusView = getFocusSession(plan);
       const item = getUnderlyingPlanItem(plan, focusView);
       const log = {
@@ -1115,6 +1157,9 @@
     confirmNextSession,
     markRestComplete,
     registerVoluntaryRecovery,
+    hasTrainingOnDate,
+    hasRecoveryOnDate,
+    isRecoveryLog,
     skipFocus,
     rescheduleFocus,
     planStats,
