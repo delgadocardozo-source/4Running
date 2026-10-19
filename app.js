@@ -1375,7 +1375,11 @@
     $('#todayRun').hidden = !isRun;
     $('#todayRest').hidden = !isRest;
     $('#todayDone').hidden = Boolean(focus);
-    $('#recoveryOffer').hidden = !isRun;
+    const todayIso = localDateISO();
+    const trainedToday = Coach().hasTrainingOnDate(logs, todayIso);
+    const recoveredToday = Coach().hasRecoveryOnDate(logs, todayIso);
+    // Recuperación voluntaria solo si hay intervalos pendientes y hoy no entrenaste ni marcaste recuperación.
+    $('#recoveryOffer').hidden = !(isRun && !trainedToday && !recoveredToday);
     $('#quietActions').hidden = !focus;
     $('#rescheduleSession').hidden = !focus;
     $('#skipSession').hidden = !focus;
@@ -1842,17 +1846,23 @@
       renderHome();
     });
     $('#markRestVoluntary').addEventListener('click', async () => {
+      const todayIso = localDateISO();
+      if (Coach().hasTrainingOnDate(logs, todayIso)) {
+        showToast('Hoy ya registraste un entrenamiento. No marca recuperación el mismo día.');
+        renderHome();
+        return;
+      }
       const ok = await askConfirm({
         title: '¿Registrar día de recuperación?',
-        body: 'Conserva el historial de este intento. La sesión de intervalos sigue pendiente: el plan no avanza.',
+        body: 'Usalo solo si hoy no vas a entrenar.\nLa sesión de intervalos sigue pendiente: el plan no avanza.',
         ok: 'Registrar recuperación',
         cancel: 'Volver'
       });
       if (!ok) return;
-      const result = Coach().registerVoluntaryRecovery(plan, logs, localDateISO());
+      const result = Coach().registerVoluntaryRecovery(plan, logs, todayIso);
       plan = result.plan;
       logs = result.logs;
-      Coach().saveLogs(logs);
+      if (!result.blocked && result.log) Coach().saveLogs(logs);
       showToast(result.message);
       renderHistory();
       renderHome();
