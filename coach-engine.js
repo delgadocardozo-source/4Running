@@ -92,7 +92,7 @@
 
   function normalizePlan(plan) {
     if (!plan || !Array.isArray(plan.sessions)) return buildDefaultPlan();
-    plan.version = 3;
+    if (!plan.version) plan.version = 3;
     plan.fiveKDefinition = plan.fiveKDefinition
       || 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).';
     plan.sessions = plan.sessions.map(s => ({
@@ -103,6 +103,38 @@
       attempts: Array.isArray(s.attempts) ? s.attempts : []
     }));
     return plan;
+  }
+
+  function loadSettingsSoft() {
+    try {
+      return JSON.parse(localStorage.getItem('pace01.settings.v1') || '{}') || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function upgradePlanAdaptive(plan, logs) {
+    if (!window.PaceAdaptive) return plan;
+    return window.PaceAdaptive.migratePlanToV4(plan, logs || [], loadSettingsSoft());
+  }
+
+  /** Tras completar un estímulo, regenera el horizonte pendiente (no reescribe historial). */
+  function regenerateHorizonAfterAdvance(plan, completedItem, decision, allLogs) {
+    if (!window.PaceAdaptive) return plan;
+    const A = window.PaceAdaptive;
+    const order = Number(completedItem?.order) || 0;
+    plan.sessions = (plan.sessions || []).filter(s => {
+      if (!isOpenStatus(s.status)) return true;
+      if (s.id === completedItem?.id) return true;
+      return Number(s.order) <= order;
+    });
+    // El ítem avanzado ya está completed; no debe quedar abierto
+    const done = plan.sessions.find(s => s.id === completedItem?.id);
+    if (done) {
+      done.status = 'completed';
+      done.blockedUntilRest = false;
+    }
+    return A.ensureHorizon(plan, allLogs || [], loadSettingsSoft(), decision);
   }
 
   function migrateLegacyLogs() {
@@ -206,23 +238,27 @@
   }
 
   function loadPlan() {
+    let plan = null;
     try {
       const stored = JSON.parse(localStorage.getItem(PLAN_KEY) || 'null');
       if (stored && Array.isArray(stored.sessions) && stored.sessions.length) {
-        const normalized = normalizePlan(stored);
-        localStorage.setItem(PLAN_KEY, JSON.stringify(normalized));
-        return normalized;
+        plan = normalizePlan(stored);
       }
     } catch { /* ignore */ }
+    if (!plan) {
+      try {
+        const v2 = JSON.parse(localStorage.getItem(LEGACY_PLAN_V2) || 'null');
+        if (v2 && Array.isArray(v2.sessions)) {
+          plan = normalizePlan(v2);
+        }
+      } catch { /* ignore */ }
+    }
+    if (!plan) plan = buildDefaultPlan();
+    let logs = [];
     try {
-      const v2 = JSON.parse(localStorage.getItem(LEGACY_PLAN_V2) || 'null');
-      if (v2 && Array.isArray(v2.sessions)) {
-        const normalized = normalizePlan(v2);
-        localStorage.setItem(PLAN_KEY, JSON.stringify(normalized));
-        return normalized;
-      }
-    } catch { /* ignore */ }
-    const plan = buildDefaultPlan();
+      logs = JSON.parse(localStorage.getItem(LOGS_KEY) || '[]') || [];
+    } catch { logs = []; }
+    plan = upgradePlanAdaptive(plan, logs);
     localStorage.setItem(PLAN_KEY, JSON.stringify(plan));
     return plan;
   }
@@ -289,6 +325,10 @@
 
   function describeStructure(structure) {
     if (!structure || structure.rest) return 'Recuperación';
+    if (window.PaceAdaptive) return window.PaceAdaptive.describeStructure(structure);
+    if (!Number(structure.walkSeconds)) {
+      return `${formatBlock(structure.runSeconds)} carrera continua`;
+    }
     return `${formatBlock(structure.runSeconds)} correr / ${formatBlock(structure.walkSeconds)} caminar ×${structure.reps}`;
   }
 
@@ -612,20 +652,37 @@
 
   /**
    * Decide progresión (no borra la ejecución).
-   * Prioridad: overrides → cumplimiento → confianza → RPE → tendencia (si RPE=6).
+   * Motor v4: PaceAdaptive.decideAdaptive (progress/consolidate/reduce/repeat/recovery/reassess).
+   * Compat: progression advance|repeat|recovery para attempts e UI.
    */
   function decideProgression(log, priorLogs = [], plan = null) {
+    if (window.PaceAdaptive) {
+      const d = window.PaceAdaptive.decideAdaptive(log, priorLogs, plan);
+      return {
+        progression: d.progression,
+        action: d.action,
+        adaptiveAction: d.action,
+        reason: d.reason,
+        medicalNotice: Boolean(d.medicalNotice),
+        override: d.action === 'recovery' && (d.reasonCode || []).includes('SAFETY_OVERRIDE'),
+        reasonCode: d.reasonCode || [],
+        profile: d.profile,
+        trend: d.trend,
+        caution: d.action === 'progress' && Number(log.rpe) === 6
+      };
+    }
+
     const rpe = Number(log.rpe);
     const override = Boolean(log.worseningDuringRun || log.alteredGait || log.forcedStop || log.severeWarning);
     const prescriptionCompleted = log.prescriptionCompleted !== false && log.execution !== 'aborted';
     const conf = readinessConfidence([...(priorLogs || []), log]);
     const reasonCode = [];
 
-    // 1) Overrides de seguridad (prioridad máxima)
     if (override) {
       reasonCode.push('SAFETY_OVERRIDE');
       return {
         progression: 'recovery',
+        action: 'recovery',
         reason: log.severeWarning
           ? 'Alerta severa: recovery obligatorio. Considerá atención médica si es urgente; la app no diagnostica.'
           : 'Override de seguridad (empeora / marcha / freno): recovery, independientemente del RPE.',
@@ -639,6 +696,7 @@
       reasonCode.push('PAIN_MODERATE');
       return {
         progression: 'recovery',
+        action: 'recovery',
         reason: 'Molestia moderada o más: recovery. El intento queda registrado.',
         medicalNotice: false,
         override: false,
@@ -646,11 +704,11 @@
       };
     }
 
-    // 2) Cumplimiento de prescripción (bloques), no distancia GPS
     if (!prescriptionCompleted) {
       reasonCode.push('PRESCRIPTION_INCOMPLETE');
       return {
         progression: 'repeat',
+        action: 'repeat',
         reason: 'No se completó la prescripción (bloques): repeat. Un RPE bajo no compensa un entrenamiento incompleto.',
         medicalNotice: false,
         override: false,
@@ -658,11 +716,11 @@
       };
     }
 
-    // 3) Confianza insuficiente → no advance automático
     if (!confidenceSufficient(conf)) {
       reasonCode.push('LOW_CONFIDENCE');
       return {
         progression: 'repeat',
+        action: 'consolidate',
         reason: 'Confianza baja o datos esenciales incompletos: no advance automático (repeat provisional).',
         medicalNotice: false,
         override: false,
@@ -671,11 +729,11 @@
       };
     }
 
-    // 4) Alertas no override (p. ej. dolor leve) → no “sin alertas”
     if (hasSafetyAlert(log)) {
       reasonCode.push('ALERT_PRESENT');
       return {
         progression: 'repeat',
+        action: 'repeat',
         reason: 'Hay alerta (p. ej. molestia) sin override: el intento cuenta, progresión = repeat.',
         medicalNotice: false,
         override: false,
@@ -683,11 +741,11 @@
       };
     }
 
-    // 5–7) RPE + tendencia
     if (rpe <= 5) {
       reasonCode.push('RPE_LE_5');
       return {
         progression: 'advance',
+        action: 'progress',
         reason: 'Cumplido + RPE ≤5 + sin alertas + confianza suficiente: advance.',
         medicalNotice: false,
         override: false,
@@ -702,6 +760,7 @@
         reasonCode.push('RPE_6_TREND_OK');
         return {
           progression: 'advance',
+          action: 'progress',
           reason: `Cumplido + RPE 6 + tendencia favorable: advance. ${trend.reason}`,
           medicalNotice: false,
           override: false,
@@ -714,6 +773,7 @@
       reasonCode.push('RPE_6_TREND_BAD');
       return {
         progression: 'repeat',
+        action: 'consolidate',
         reason: `Cumplido + RPE 6 + tendencia no favorable: repeat. ${trend.reason}`,
         medicalNotice: false,
         override: false,
@@ -726,6 +786,7 @@
     reasonCode.push('RPE_GE_7');
     return {
       progression: 'repeat',
+      action: 'repeat',
       reason: 'Cumplido + RPE ≥7: repeat. El entrenamiento queda registrado.',
       medicalNotice: false,
       override: false,
@@ -747,12 +808,20 @@
     };
   }
 
-  function buildDayCoaching(focus, settings, readiness) {
+  function buildDayCoaching(focus, settings, readiness, plan = null) {
+    if (!focus && plan && window.PaceAdaptive) {
+      window.PaceAdaptive.ensureHorizon(plan, loadLogs(), settings || loadSettingsSoft(), {
+        action: 'consolidate',
+        reason: 'Continuidad del plan adaptativo.'
+      });
+      focus = getFocusSession(plan);
+      savePlan(plan);
+    }
     if (!focus) {
       return {
         eyebrow: 'PLAN',
-        title: 'Secuencia completa por ahora',
-        body: 'No hay sesión pendiente. Revisá historial o exportá datos antes de ampliar el plan.',
+        title: 'Generando próxima sesión',
+        body: 'El motor adaptativo prepara el siguiente estímulo. Si esto persiste, revisá el historial.',
         cta: 'Ver historial',
         mode: 'done'
       };
@@ -812,6 +881,7 @@
     const execution = log.execution || 'completed';
     const prescriptionCompleted = log.prescriptionCompleted !== false && execution !== 'aborted';
 
+    const adaptiveAction = decision.adaptiveAction || decision.action || decision.progression;
     const attempt = {
       id: `att-${Date.now()}`,
       logId: log.id,
@@ -819,6 +889,8 @@
       execution,
       prescriptionCompleted,
       progression: decision.progression,
+      adaptiveAction,
+      action: adaptiveAction,
       rpe: log.rpe,
       pain: Boolean(log.pain),
       painIntensity: log.painIntensity,
@@ -837,9 +909,11 @@
     log.execution = execution;
     log.prescriptionCompleted = prescriptionCompleted;
     log.progression = decision.progression;
+    log.adaptiveAction = adaptiveAction;
+    log.action = adaptiveAction;
     log.reasonCode = decision.reasonCode || [];
 
-    messages.push(`Intento #${item.attempts.length}: ${execution}${prescriptionCompleted ? '' : ' · incompleto'} · progresión ${decision.progression}.`);
+    messages.push(`Intento #${item.attempts.length}: ${execution}${prescriptionCompleted ? '' : ' · incompleto'} · ${adaptiveAction} (${decision.progression}).`);
     messages.push(decision.reason);
 
     if (decision.progression === 'repeat') {
@@ -875,29 +949,44 @@
       };
     }
 
-    // advance
+    // advance (progress | consolidate | reduce | reassess)
     item.status = 'completed';
     item.blockedUntilRest = false;
     item.completedLogId = log.id;
+    const prevStructure = clone(item.structure);
+    regenerateHorizonAfterAdvance(plan, item, decision, [...priorLogs, log]);
     const next = getFocusSession(plan);
+    let explanation = null;
+    if (window.PaceAdaptive && next) {
+      const nextRun = next.kind === 'run'
+        ? next
+        : sortedPlanSessions(plan).find(s => isOpenStatus(s.status) && s.kind === 'run');
+      if (nextRun?.structure) {
+        explanation = window.PaceAdaptive.buildDiffMessage(prevStructure, nextRun.structure, decision);
+        nextRun.changeSummary = explanation;
+        nextRun.justification = decision.reason;
+      }
+    }
     if (next) {
       if (next.kind === 'rest') {
-        messages.push(`Siguiente prescripción: ${next.title} (recuperación válida).`);
+        messages.push(`Siguiente: ${next.title} (recuperación válida).`);
       } else {
-        messages.push(`Siguiente prescripción: ${next.title} · ${describeStructure(next.structure)}.`);
+        messages.push(`Siguiente: ${next.title} · ${describeStructure(next.structure)}.`);
       }
     } else {
-      messages.push('Secuencia al día. Buen trabajo.');
+      messages.push('Continuidad del plan: se regenerará el horizonte en la próxima carga.');
     }
     return {
       plan,
       message: messages.join(' '),
       advanced: true,
-      action: 'advance',
+      action: adaptiveAction,
       progression: 'advance',
       next,
       decision,
-      attempt
+      attempt,
+      explanation,
+      previousStructure: prevStructure
     };
   }
 
@@ -947,6 +1036,12 @@
         kind: 'recovery-gate'
       });
       logs.push(log);
+      if (window.PaceAdaptive) {
+        window.PaceAdaptive.ensureHorizon(plan, logs, loadSettingsSoft(), {
+          action: 'consolidate',
+          reason: 'Tras recuperación de seguridad.'
+        });
+      }
       const next = getFocusSession(plan);
       return {
         plan,
@@ -975,6 +1070,12 @@
       pain: false
     });
     logs.push(log);
+    if (window.PaceAdaptive) {
+      window.PaceAdaptive.ensureHorizon(plan, logs, loadSettingsSoft(), {
+        action: 'consolidate',
+        reason: 'Tras descanso programado.'
+      });
+    }
     const next = getFocusSession(plan);
     return {
       plan,
@@ -1003,6 +1104,12 @@
       rpe: null,
       pain: false
     });
+    if (window.PaceAdaptive) {
+      window.PaceAdaptive.ensureHorizon(plan, loadLogs(), loadSettingsSoft(), {
+        action: 'consolidate',
+        reason: 'Tras omitir: continuidad del horizonte.'
+      });
+    }
     const next = getFocusSession(plan);
     return {
       plan,
@@ -1189,6 +1296,9 @@
     skipFocus,
     rescheduleFocus,
     planStats,
-    buildDefaultPlan
+    buildDefaultPlan,
+    upgradePlanAdaptive,
+    regenerateHorizonAfterAdvance,
+    ENGINE_VERSION: () => (window.PaceAdaptive && window.PaceAdaptive.ENGINE_VERSION) || '3.0.0'
   };
 })();

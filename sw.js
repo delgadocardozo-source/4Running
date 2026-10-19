@@ -1,9 +1,10 @@
-const CACHE = 'pace01-v1.7.2';
+const CACHE = 'pace01-v2.0.0';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './adaptive-engine.js',
   './coach-engine.js',
   './manifest.webmanifest',
   './hero-runner.jpg',
