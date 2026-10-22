@@ -43,6 +43,8 @@
   let transitionLock = false;
   let speakGeneration = 0;
   let lastSaveResult = null;
+  /** Tiempo del cronómetro al abrir el cierre (para no comparar contra un elapsed vivo). */
+  let closeMeasuredTime = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -676,7 +678,8 @@
     prepareCloseForm({ fromTimer: true });
     const run = activeRunSession();
     $('#sessionPlanId').value = activePlanSessionId || run?.id || '';
-    $('#sessionTime').value = formatTime(elapsedMs / 1000);
+    closeMeasuredTime = formatTime(elapsedMs / 1000);
+    $('#sessionTime').value = closeMeasuredTime;
     $('#sessionDistance').value = distance ? distance.toFixed(2) : '';
     $('#sessionDistanceEstimated').checked = true;
     syncDistanceEstimateUi();
@@ -1379,9 +1382,10 @@
   }
 
   function togglePainDetails() {
-    const yes = $('#painYes').checked;
-    $('#painDetails').hidden = !yes;
-    $('#sessionPainLocation').required = yes;
+    const yes = $('#painYes')?.checked;
+    if ($('#painDetails')) $('#painDetails').hidden = !yes;
+    // No usar required nativo: campos en pasos ocultos bloquean el submit sin mensaje visible.
+    if ($('#sessionPainLocation')) $('#sessionPainLocation').required = false;
   }
 
   function sortedLogs() {
@@ -1638,124 +1642,141 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  function saveSessionFromForm(e) {
-    e.preventDefault();
-    const rpe = selectedValue('sessionRpe');
-    const painVal = selectedValue('sessionPain');
-    if (!rpe || !painVal) {
-      showToast('Completá RPE y molestia/dolor');
-      showCloseStep(1);
-      return;
-    }
-    const pain = painVal === 'yes';
-    if (pain && !$('#sessionPainLocation').value.trim()) {
-      showToast('Indicá la ubicación de la molestia');
-      return;
-    }
-    const done = selectedValue('prescriptionDone');
-    if (!done) {
-      showToast('Indicá si terminaste la sesión');
-      showCloseStep(1);
-      return;
-    }
-    if (!$('#sessionDate').value || !$('#sessionTime').value.trim()) {
-      showToast('Completá fecha y tiempo');
-      showCloseStep(3);
-      return;
-    }
+  function timeToSec(t) {
+    const p = String(t || '').split(':').map(Number);
+    if (p.some(n => !Number.isFinite(n))) return 0;
+    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+    if (p.length === 2) return p[0] * 60 + p[1];
+    return Number(t) || 0;
+  }
 
-    const external = $('#sessionExternal').value === '1';
-    const fromTimer = $('#sessionFromTimer').value === '1';
-    if (fromTimer && !$('#sessionTimeConfirmed')?.checked) {
-      const measured = formatTime(elapsedMs / 1000);
-      const manual = $('#sessionTime').value.trim();
-      if (manual && measured && manual !== measured) {
-        const toSec = (t) => {
-          const p = String(t).split(':').map(Number);
-          if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
-          if (p.length === 2) return p[0] * 60 + p[1];
-          return Number(t) || 0;
-        };
-        const delta = Math.abs(toSec(manual) - toSec(measured));
-        if (delta >= 60) {
-          const ok = window.confirm(`El tiempo manual (${manual}) difiere del cronómetro (${measured}) en ${Math.round(delta)} s. ¿Confirmás la corrección?`);
-          if (!ok) {
-            showCloseStep(3);
-            return;
+  async function saveSessionFromForm(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    try {
+      const rpe = selectedValue('sessionRpe');
+      const painVal = selectedValue('sessionPain');
+      if (!rpe || !painVal) {
+        showToast('Completá RPE y molestia/dolor');
+        showCloseStep(1);
+        return;
+      }
+      const pain = painVal === 'yes';
+      if (pain && !$('#sessionPainLocation').value.trim()) {
+        showToast('Indicá la ubicación de la molestia');
+        showCloseStep(2);
+        return;
+      }
+      const done = selectedValue('prescriptionDone');
+      if (!done) {
+        showToast('Indicá si terminaste la sesión');
+        showCloseStep(1);
+        return;
+      }
+      if (!$('#sessionDate').value || !$('#sessionTime').value.trim()) {
+        showToast('Completá fecha y tiempo');
+        showCloseStep(3);
+        return;
+      }
+
+      const external = $('#sessionExternal').value === '1';
+      const fromTimer = $('#sessionFromTimer').value === '1';
+      if (fromTimer) {
+        const measured = closeMeasuredTime || formatTime(elapsedMs / 1000);
+        const manual = $('#sessionTime').value.trim();
+        if (manual && measured && manual !== measured) {
+          const delta = Math.abs(timeToSec(manual) - timeToSec(measured));
+          if (delta >= 60) {
+            const ok = await askConfirm({
+              title: '¿Confirmás el tiempo?',
+              body: `El tiempo indicado (${manual}) difiere del cronómetro (${measured}) en unos ${Math.round(delta)} s.`,
+              ok: 'Guardar con ese tiempo',
+              cancel: 'Revisar'
+            });
+            if (!ok) {
+              showCloseStep(3);
+              return;
+            }
           }
         }
       }
-    }
-    const date = $('#sessionDate').value || localDateISO();
-    const id = `${date}-${Date.now()}`;
-    const prescriptionCompleted = done === 'yes';
-    const typeValue = $('#sessionType').value;
-    const environment = typeValue === 'Cinta' ? 'treadmill'
-      : typeValue === 'Exterior' ? 'outdoor'
-      : (sessionEnvironment || settings.lastEnvironment || null);
-    const log = {
-      id,
-      date,
-      type: typeValue,
-      environment,
-      planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
-      time: $('#sessionTime').value.trim() || null,
-      distanceKm: parseOptionalNumber($('#sessionDistance').value),
-      distanceEstimated: $('#sessionDistanceEstimated').checked,
-      maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
-      couldContinue: selectedValue('couldContinue'),
-      rpe: Number(rpe),
-      pain,
-      painLocation: pain ? $('#sessionPainLocation').value.trim() : '',
-      painIntensity: pain ? parseOptionalNumber($('#sessionPainIntensity').value) : null,
-      worseningDuringRun: pain && $('#flagWorsening').checked,
-      alteredGait: pain && $('#flagAlteredGait').checked,
-      forcedStop: pain && $('#flagForcedStop').checked,
-      severeWarning: pain && $('#flagSevere').checked,
-      prescriptionCompleted,
-      extraSeconds: parseOptionalNumber($('#sessionExtraSec').value) || 0,
-      execution: prescriptionCompleted ? 'completed' : 'aborted',
-      progression: null,
-      notes: $('#sessionNotes').value.trim(),
-      source: external ? 'external' : (fromTimer ? 'timer' : 'manual')
-    };
 
-    logs.push(log);
-    let result = null;
+      const date = $('#sessionDate').value || localDateISO();
+      const id = `${date}-${Date.now()}`;
+      const prescriptionCompleted = done === 'yes';
+      const typeValue = $('#sessionType').value;
+      const environment = typeValue === 'Cinta' ? 'treadmill'
+        : typeValue === 'Exterior' ? 'outdoor'
+        : (sessionEnvironment || settings.lastEnvironment || null);
+      const log = {
+        id,
+        date,
+        type: typeValue,
+        environment,
+        planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
+        time: $('#sessionTime').value.trim() || null,
+        distanceKm: parseOptionalNumber($('#sessionDistance').value),
+        distanceEstimated: $('#sessionDistanceEstimated').checked,
+        maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
+        couldContinue: selectedValue('couldContinue'),
+        rpe: Number(rpe),
+        pain,
+        painLocation: pain ? $('#sessionPainLocation').value.trim() : '',
+        painIntensity: pain ? parseOptionalNumber($('#sessionPainIntensity').value) : null,
+        worseningDuringRun: pain && $('#flagWorsening').checked,
+        alteredGait: pain && $('#flagAlteredGait').checked,
+        forcedStop: pain && $('#flagForcedStop').checked,
+        severeWarning: pain && $('#flagSevere').checked,
+        prescriptionCompleted,
+        extraSeconds: parseOptionalNumber($('#sessionExtraSec').value) || 0,
+        execution: prescriptionCompleted ? 'completed' : 'aborted',
+        progression: null,
+        notes: $('#sessionNotes').value.trim(),
+        source: external ? 'external' : (fromTimer ? 'timer' : 'manual')
+      };
 
-    if (log.planSessionId && !external) {
-      result = Coach().confirmNextSession(plan, log, logs);
-      plan = result.plan;
-      lastSaveResult = result;
-      Coach().savePlan(plan);
-      Coach().saveLogs(logs);
-      if (result.medicalNotice || result.decision?.medicalNotice) {
-        setTimeout(() => {
-          showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
-        }, 3400);
+      logs.push(log);
+      let result = null;
+
+      if (log.planSessionId && !external) {
+        result = Coach().confirmNextSession(plan, log, logs);
+        plan = result.plan;
+        lastSaveResult = result;
+        Coach().savePlan(plan);
+        Coach().saveLogs(logs);
+        if (result.medicalNotice || result.decision?.medicalNotice) {
+          setTimeout(() => {
+            showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
+          }, 3400);
+        }
+      } else {
+        Coach().saveLogs(logs);
+        lastSaveResult = null;
+        audit('log-unlinked', { source: log.source, id: log.id });
       }
-    } else {
-      Coach().saveLogs(logs);
-      lastSaveResult = null;
-      audit('log-unlinked', { source: log.source, id: log.id });
-    }
 
-    if (environment) {
-      settings.lastEnvironment = environment;
-      persistSettings();
-    }
+      if (environment) {
+        settings.lastEnvironment = environment;
+        persistSettings();
+      }
 
-    $('#sessionDialog').close();
-    $('#sessionForm').reset();
-    $('#sessionFromTimer').value = '0';
-    togglePainDetails();
-    reloadWorkoutFromPlan();
-    renderHistory();
-    renderHome();
-    if (result && !external) showAdaptationResult(result, log);
-    else {
-      showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
-      navTo('home');
+      closeMeasuredTime = null;
+      if ($('#sessionDialog')?.open) $('#sessionDialog').close();
+      $('#sessionForm').reset();
+      $('#sessionFromTimer').value = '0';
+      $('#sessionPainLocation').required = false;
+      togglePainDetails();
+      reloadWorkoutFromPlan();
+      renderHistory();
+      renderHome();
+      if (result && !external) showAdaptationResult(result, log);
+      else {
+        showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
+        navTo('home');
+      }
+    } catch (err) {
+      console.error('[pace01] save-session', err);
+      showToast('No se pudo guardar. Probá de nuevo; si persiste, exportá tu historial.');
+      showCloseStep(3);
     }
   }
 
@@ -2232,7 +2253,14 @@
     $('#editSpeeds').addEventListener('click', openSpeedDialog);
     $('#speedForm').addEventListener('submit', saveSessionSpeeds);
     $('#addSession').addEventListener('click', openManualLog);
-    $('#sessionForm').addEventListener('submit', saveSessionFromForm);
+    $('#sessionForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveSessionFromForm(e);
+    });
+    $('#saveSession').addEventListener('click', (e) => {
+      e.preventDefault();
+      saveSessionFromForm(e);
+    });
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#exportHistory').addEventListener('click', exportSessions);
     $('#painYes').addEventListener('change', togglePainDetails);
