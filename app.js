@@ -717,6 +717,9 @@
     $('#closeNext').hidden = step === 3;
     $('#saveSession').hidden = step !== 3;
     $('#sessionDialog').dataset.step = String(step);
+    // El cuerpo scrollea; el footer queda fijo. Volver arriba al cambiar de paso.
+    const scroller = $('#sessionForm')?.querySelector('.modal-scroll');
+    if (scroller) scroller.scrollTop = 0;
   }
 
   function validateCloseStep(step) {
@@ -1879,11 +1882,14 @@
     activePlanSessionId = run.id;
     $('#sessionPlanId').value = run.id;
     $('#sessionDate').value = localDateISO();
-    $('#sessionTime').value = '';
-    $('#sessionDistance').value = '';
+    const st = run.structure;
+    const estimatedMin = st ? structureDurationMin(st) : 0;
+    // Precarga tiempo estimado del plan; el usuario puede corregirlo en el paso Guardar.
+    $('#sessionTime').value = estimatedMin ? formatTime(estimatedMin * 60) : '';
+    const km = st ? estimateStructureKm(st) : null;
+    $('#sessionDistance').value = km ? km.toFixed(2) : '';
     $('#sessionDistanceEstimated').checked = true;
     syncDistanceEstimateUi();
-    const st = run.structure;
     const cont = st?.runSeconds || '';
     $('#sessionMaxRunBlockSec').value = cont ? String(cont) : '';
     $('#sessionMaxRunBlockLabel').textContent = cont
@@ -1891,7 +1897,7 @@
       : 'Indicá el mayor tramo continuo que corriste.';
     if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#closeContext').hidden = false;
-    $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá tiempo, RPE y si terminaste la prescripción.';
+    $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá RPE y confirmá el tiempo (ya viene estimado). El botón Guardar queda fijo abajo.';
     showCloseStep(1);
     if (!$('#sessionDialog').open) $('#sessionDialog').showModal();
   }
@@ -2038,6 +2044,14 @@
 
   function askConfirm({ title, body, ok = 'Confirmar', cancel = 'Volver', danger = false }) {
     const dialog = $('#confirmDialog');
+    const session = $('#sessionDialog');
+    // Safari/iOS no admite bien dos <dialog modal> a la vez: cerramos el de sesión y lo reabrimos después.
+    const reopenSession = Boolean(session?.open);
+    if (reopenSession) {
+      try { session.close(); } catch (err) {
+        console.error('[pace01] close-session-before-confirm', err);
+      }
+    }
     $('#confirmTitle').textContent = title;
     $('#confirmBody').textContent = body;
     const okBtn = $('#confirmOk');
@@ -2049,10 +2063,27 @@
     return new Promise(resolve => {
       const onClose = () => {
         dialog.removeEventListener('close', onClose);
-        resolve(dialog.returnValue === 'ok');
+        const accepted = dialog.returnValue === 'ok';
+        if (reopenSession && session && !session.open) {
+          try { session.showModal(); } catch (err) {
+            console.error('[pace01] reopen-session-after-confirm', err);
+          }
+          if (!accepted) showCloseStep(3);
+        }
+        resolve(accepted);
       };
       dialog.addEventListener('close', onClose);
-      if (!dialog.open) dialog.showModal();
+      try {
+        if (!dialog.open) dialog.showModal();
+      } catch (err) {
+        console.error('[pace01] confirm-dialog', err);
+        dialog.removeEventListener('close', onClose);
+        if (reopenSession && session && !session.open) {
+          try { session.showModal(); } catch { /* */ }
+          showCloseStep(3);
+        }
+        resolve(false);
+      }
     });
   }
 
