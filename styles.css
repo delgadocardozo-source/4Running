@@ -533,10 +533,46 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
   padding: calc(20px + env(safe-area-inset-top)) 22px 28px;
   display: grid; gap: 16px; align-content: start;
 }
+/* Cierre a pantalla completa: footer fijo. Sin esto, Guardar queda bajo el fold en iPhone. */
+.modal-card-fixed {
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  padding-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+.modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding: 0 0 12px;
+}
 .modal-heading { display: flex; justify-content: space-between; align-items: flex-start; }
 .modal-heading h2 { font-size: 28px; letter-spacing: -0.04em; margin-top: 6px; }
 .modal-actions { display: flex; gap: 8px; align-items: center; }
 .modal-actions .primary-button { width: auto; flex: 1; }
+.modal-actions-sticky {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 0 -22px;
+  padding: 12px 22px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(9,10,14,0), var(--bg) 28%);
+  border-top: 1px solid var(--line);
+}
+.today-log-done {
+  width: 100%;
+  margin-top: 8px;
+  justify-content: center;
+}
 .danger-button { background: var(--danger) !important; color: white !important; }
 #confirmBody { white-space: pre-line; color: var(--muted); line-height: 1.45; }
 .step-dots { display: flex; gap: 8px; }
@@ -597,6 +633,11 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
   .modal { height: auto; }
   .modal-card {
     min-height: 0; border-radius: 28px; margin: 24px auto; border: 1px solid var(--line);
+  }
+  .modal-card-fixed {
+    height: min(920px, 92dvh);
+    max-height: 92dvh;
+    border-radius: 28px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

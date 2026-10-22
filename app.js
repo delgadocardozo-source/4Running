@@ -717,6 +717,9 @@
     $('#closeNext').hidden = step === 3;
     $('#saveSession').hidden = step !== 3;
     $('#sessionDialog').dataset.step = String(step);
+    // El cuerpo scrollea; el footer queda fijo. Volver arriba al cambiar de paso.
+    const scroller = $('#sessionForm')?.querySelector('.modal-scroll');
+    if (scroller) scroller.scrollTop = 0;
   }
 
   function validateCloseStep(step) {
@@ -1650,8 +1653,21 @@
     return Number(t) || 0;
   }
 
+  let saveInFlight = false;
+
   async function saveSessionFromForm(e) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (saveInFlight) return;
+
+    const saveBtn = $('#saveSession');
+    const setSavingUi = (busy) => {
+      saveInFlight = busy;
+      if (!saveBtn) return;
+      saveBtn.disabled = busy;
+      saveBtn.textContent = busy ? 'Guardando…' : 'Guardar entrenamiento';
+    };
+
     try {
       const rpe = selectedValue('sessionRpe');
       const painVal = selectedValue('sessionPain');
@@ -1677,6 +1693,8 @@
         showCloseStep(3);
         return;
       }
+
+      setSavingUi(true);
 
       const external = $('#sessionExternal').value === '1';
       const fromTimer = $('#sessionFromTimer').value === '1';
@@ -1743,6 +1761,7 @@
         lastSaveResult = result;
         Coach().savePlan(plan);
         Coach().saveLogs(logs);
+        audit('session-saved', { id: log.id, planSessionId: log.planSessionId, source: log.source });
         if (result.medicalNotice || result.decision?.medicalNotice) {
           setTimeout(() => {
             showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
@@ -1768,15 +1787,25 @@
       reloadWorkoutFromPlan();
       renderHistory();
       renderHome();
-      if (result && !external) showAdaptationResult(result, log);
-      else {
-        showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
+
+      // UI post-guardado: si falla, el dato YA está en localStorage; no digas «no se pudo guardar».
+      try {
+        if (result && !external) showAdaptationResult(result, log);
+        else {
+          showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Entrenamiento guardado');
+          navTo('home');
+        }
+      } catch (uiErr) {
+        console.error('[pace01] save-session-ui', uiErr);
+        showToast('Entrenamiento guardado');
         navTo('home');
       }
     } catch (err) {
       console.error('[pace01] save-session', err);
       showToast('No se pudo guardar. Probá de nuevo; si persiste, exportá tu historial.');
       showCloseStep(3);
+    } finally {
+      setSavingUi(false);
     }
   }
 
@@ -1879,11 +1908,14 @@
     activePlanSessionId = run.id;
     $('#sessionPlanId').value = run.id;
     $('#sessionDate').value = localDateISO();
-    $('#sessionTime').value = '';
-    $('#sessionDistance').value = '';
+    const st = run.structure;
+    const estimatedMin = st ? structureDurationMin(st) : 0;
+    // Precarga tiempo estimado del plan; el usuario puede corregirlo en el paso Guardar.
+    $('#sessionTime').value = estimatedMin ? formatTime(estimatedMin * 60) : '';
+    const km = st ? estimateStructureKm(st) : null;
+    $('#sessionDistance').value = km ? km.toFixed(2) : '';
     $('#sessionDistanceEstimated').checked = true;
     syncDistanceEstimateUi();
-    const st = run.structure;
     const cont = st?.runSeconds || '';
     $('#sessionMaxRunBlockSec').value = cont ? String(cont) : '';
     $('#sessionMaxRunBlockLabel').textContent = cont
@@ -1891,7 +1923,7 @@
       : 'Indicá el mayor tramo continuo que corriste.';
     if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#closeContext').hidden = false;
-    $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá tiempo, RPE y si terminaste la prescripción.';
+    $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá RPE y confirmá el tiempo (ya viene estimado). El botón Guardar queda fijo abajo.';
     showCloseStep(1);
     if (!$('#sessionDialog').open) $('#sessionDialog').showModal();
   }
@@ -2038,6 +2070,14 @@
 
   function askConfirm({ title, body, ok = 'Confirmar', cancel = 'Volver', danger = false }) {
     const dialog = $('#confirmDialog');
+    const session = $('#sessionDialog');
+    // Safari/iOS no admite bien dos <dialog modal> a la vez: cerramos el de sesión y lo reabrimos después.
+    const reopenSession = Boolean(session?.open);
+    if (reopenSession) {
+      try { session.close(); } catch (err) {
+        console.error('[pace01] close-session-before-confirm', err);
+      }
+    }
     $('#confirmTitle').textContent = title;
     $('#confirmBody').textContent = body;
     const okBtn = $('#confirmOk');
@@ -2049,10 +2089,27 @@
     return new Promise(resolve => {
       const onClose = () => {
         dialog.removeEventListener('close', onClose);
-        resolve(dialog.returnValue === 'ok');
+        const accepted = dialog.returnValue === 'ok';
+        if (reopenSession && session && !session.open) {
+          try { session.showModal(); } catch (err) {
+            console.error('[pace01] reopen-session-after-confirm', err);
+          }
+          if (!accepted) showCloseStep(3);
+        }
+        resolve(accepted);
       };
       dialog.addEventListener('close', onClose);
-      if (!dialog.open) dialog.showModal();
+      try {
+        if (!dialog.open) dialog.showModal();
+      } catch (err) {
+        console.error('[pace01] confirm-dialog', err);
+        dialog.removeEventListener('close', onClose);
+        if (reopenSession && session && !session.open) {
+          try { session.showModal(); } catch { /* */ }
+          showCloseStep(3);
+        }
+        resolve(false);
+      }
     });
   }
 
@@ -2303,10 +2360,12 @@
     $('#finishAndSave')?.addEventListener('click', finishAndSaveNow);
     $('#sessionForm').addEventListener('submit', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       saveSessionFromForm(e);
     });
     $('#saveSession').addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       saveSessionFromForm(e);
     });
     $('#settingsForm').addEventListener('submit', saveSettings);

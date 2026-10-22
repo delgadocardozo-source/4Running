@@ -78,7 +78,7 @@
           </div>
           <p class="schedule-note" id="scheduleNote" hidden></p>
           <button class="primary-button today-start" id="startWorkoutHome" type="button">Iniciar entrenamiento</button>
-          <button class="text-button today-preview" id="logPlanSession" type="button">Registrar sesión hecha</button>
+          <button class="quiet-button today-log-done" id="logPlanSession" type="button">Registrar sesión hecha</button>
           <button class="text-button today-preview" id="previewWorkout" type="button">Ver bloques</button>
           <aside class="home-adapt" id="homeAdaptNote" hidden></aside>
         </div>
@@ -297,119 +297,121 @@
   </div>
 
   <dialog id="sessionDialog" class="modal">
-    <form method="dialog" class="modal-card" id="sessionForm" novalidate>
-      <div class="modal-heading">
-        <div>
-          <span class="eyebrow" id="closeEyebrow">Cierre</span>
-          <h2 id="closeTitle">Resultado</h2>
-        </div>
-        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
-      </div>
-      <div class="finish-hero" id="finishHero" hidden>
-        <p>Entrenamiento completado</p>
-        <div class="finish-stats">
-          <div><span>Tiempo total</span><strong id="finishTime">—</strong></div>
-          <div><span>Distancia</span><strong id="finishDistance">—</strong></div>
-          <div><span>Máx. continuo</span><strong id="finishContinuous">—</strong></div>
-        </div>
-      </div>
-      <div class="step-dots" id="closeSteps" aria-hidden="true">
-        <span data-step-dot="1">Resultado</span>
-        <span data-step-dot="2">Molestia</span>
-        <span data-step-dot="3">Guardar</span>
-      </div>
-      <p class="close-context" id="closeContext" hidden>Actividad externa. No completa una sesión del plan.</p>
-
-      <input type="hidden" id="sessionPlanId" value="" />
-      <input type="hidden" id="sessionMaxRunBlockSec" value="" />
-      <input type="hidden" id="sessionExtraSec" value="0" />
-      <input type="hidden" id="sessionFromTimer" value="0" />
-      <input type="hidden" id="sessionExternal" value="0" />
-      <input type="checkbox" id="sessionPrescriptionCompleted" hidden>
-      <input type="checkbox" id="sessionDistanceEstimated" hidden checked>
-
-      <section data-close-step="1">
-        <p class="step-question" id="resultQuestion">¿Completaste la prescripción?</p>
-        <div class="choice-row choice-large">
-          <label><input type="radio" name="prescriptionDone" value="yes"> Sí</label>
-          <label><input type="radio" name="prescriptionDone" value="no"> No</label>
-        </div>
-        <p class="step-question">RPE</p>
-        <div class="choice-row rpe-grid" id="rpeChoices">
-          <label><input type="radio" name="sessionRpe" value="1"> 1</label>
-          <label><input type="radio" name="sessionRpe" value="2"> 2</label>
-          <label><input type="radio" name="sessionRpe" value="3"> 3</label>
-          <label><input type="radio" name="sessionRpe" value="4"> 4</label>
-          <label><input type="radio" name="sessionRpe" value="5"> 5</label>
-          <label><input type="radio" name="sessionRpe" value="6"> 6</label>
-          <label><input type="radio" name="sessionRpe" value="7"> 7</label>
-          <label><input type="radio" name="sessionRpe" value="8"> 8</label>
-          <label><input type="radio" name="sessionRpe" value="9"> 9</label>
-          <label><input type="radio" name="sessionRpe" value="10"> 10</label>
-        </div>
-        <p class="step-question">¿Tuviste dolor o molestia?</p>
-        <div class="choice-row choice-large">
-          <label><input type="radio" name="sessionPain" value="no" id="painNo"> No</label>
-          <label><input type="radio" name="sessionPain" value="yes" id="painYes"> Sí</label>
-        </div>
-      </section>
-
-      <section data-close-step="2" hidden>
-        <div id="painDetails" class="pain-details">
-          <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Pantorrilla, rodilla, lumbar…"></label>
-          <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="1" max="5" step="1" placeholder="2"></label>
-          <fieldset class="choice-fieldset">
-            <legend>Señales de alarma</legend>
-            <label class="check-row"><input type="checkbox" id="flagWorsening"> Fue empeorando durante la sesión</label>
-            <label class="check-row"><input type="checkbox" id="flagAlteredGait"> Alteró la marcha</label>
-            <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
-            <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito o síntomas neurológicos</label>
-          </fieldset>
-          <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
-        </div>
-      </section>
-
-      <section data-close-step="3" hidden>
-        <div class="close-metric" id="maxRunBlockDisplay">
-          <span class="metric-label">Máx. continuo medido</span>
-          <strong id="sessionMaxRunBlockLabel">—</strong>
-          <small>Mayor tramo de carrera sin caminar.</small>
-          <small id="sessionExtraLabel" hidden></small>
-        </div>
-        <div class="form-grid two">
-          <label>Fecha<input type="date" id="sessionDate"></label>
-          <label>Realizado en
-            <select id="sessionType">
-              <option value="Cinta">Cinta</option>
-              <option value="Exterior">Aire libre</option>
-            </select>
-          </label>
-          <label>Tiempo<input type="text" id="sessionTime" placeholder="38:12"></label>
-          <label>Distancia
-            <span class="input-unit">
-              <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
-              <span>km</span>
-            </span>
-            <small class="field-hint" id="distanceHint">Si viene del timer, arranca como estimada hasta que la confirmes.</small>
-          </label>
-        </div>
-        <div class="distance-confirm-row" id="distanceConfirmRow">
-          <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
-          <button type="button" class="quiet-button" id="confirmDistanceBtn">Confirmar distancia real</button>
-        </div>
-        <fieldset class="choice-fieldset">
-          <legend>¿Podías seguir corriendo?</legend>
-          <div class="choice-row wrap">
-            <label><input type="radio" name="couldContinue" value="no"> No</label>
-            <label><input type="radio" name="couldContinue" value="2-5"> Sí, un poco</label>
-            <label><input type="radio" name="couldContinue" value="5plus"> Sí, bastante</label>
+    <form class="modal-card modal-card-fixed" id="sessionForm" novalidate action="#" method="post">
+      <div class="modal-scroll">
+        <div class="modal-heading">
+          <div>
+            <span class="eyebrow" id="closeEyebrow">Cierre</span>
+            <h2 id="closeTitle">Resultado</h2>
           </div>
-          <p class="field-hint">Esto describe tu margen. No suma minutos al tiempo continuo.</p>
-        </fieldset>
-        <label>Notas<input type="text" id="sessionNotes" placeholder="Opcional"></label>
-      </section>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+        </div>
+        <div class="finish-hero" id="finishHero" hidden>
+          <p>Entrenamiento completado</p>
+          <div class="finish-stats">
+            <div><span>Tiempo total</span><strong id="finishTime">—</strong></div>
+            <div><span>Distancia</span><strong id="finishDistance">—</strong></div>
+            <div><span>Máx. continuo</span><strong id="finishContinuous">—</strong></div>
+          </div>
+        </div>
+        <div class="step-dots" id="closeSteps" aria-hidden="true">
+          <span data-step-dot="1">Resultado</span>
+          <span data-step-dot="2">Molestia</span>
+          <span data-step-dot="3">Guardar</span>
+        </div>
+        <p class="close-context" id="closeContext" hidden>Actividad externa. No completa una sesión del plan.</p>
 
-      <div class="modal-actions">
+        <input type="hidden" id="sessionPlanId" value="" />
+        <input type="hidden" id="sessionMaxRunBlockSec" value="" />
+        <input type="hidden" id="sessionExtraSec" value="0" />
+        <input type="hidden" id="sessionFromTimer" value="0" />
+        <input type="hidden" id="sessionExternal" value="0" />
+        <input type="checkbox" id="sessionPrescriptionCompleted" hidden>
+        <input type="checkbox" id="sessionDistanceEstimated" hidden checked>
+
+        <section data-close-step="1">
+          <p class="step-question" id="resultQuestion">¿Completaste la prescripción?</p>
+          <div class="choice-row choice-large">
+            <label><input type="radio" name="prescriptionDone" value="yes"> Sí</label>
+            <label><input type="radio" name="prescriptionDone" value="no"> No</label>
+          </div>
+          <p class="step-question">RPE</p>
+          <div class="choice-row rpe-grid" id="rpeChoices">
+            <label><input type="radio" name="sessionRpe" value="1"> 1</label>
+            <label><input type="radio" name="sessionRpe" value="2"> 2</label>
+            <label><input type="radio" name="sessionRpe" value="3"> 3</label>
+            <label><input type="radio" name="sessionRpe" value="4"> 4</label>
+            <label><input type="radio" name="sessionRpe" value="5"> 5</label>
+            <label><input type="radio" name="sessionRpe" value="6"> 6</label>
+            <label><input type="radio" name="sessionRpe" value="7"> 7</label>
+            <label><input type="radio" name="sessionRpe" value="8"> 8</label>
+            <label><input type="radio" name="sessionRpe" value="9"> 9</label>
+            <label><input type="radio" name="sessionRpe" value="10"> 10</label>
+          </div>
+          <p class="step-question">¿Tuviste dolor o molestia?</p>
+          <div class="choice-row choice-large">
+            <label><input type="radio" name="sessionPain" value="no" id="painNo"> No</label>
+            <label><input type="radio" name="sessionPain" value="yes" id="painYes"> Sí</label>
+          </div>
+        </section>
+
+        <section data-close-step="2" hidden>
+          <div id="painDetails" class="pain-details">
+            <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Pantorrilla, rodilla, lumbar…"></label>
+            <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="0" max="5" step="1" placeholder="2"></label>
+            <fieldset class="choice-fieldset">
+              <legend>Señales de alarma</legend>
+              <label class="check-row"><input type="checkbox" id="flagWorsening"> Fue empeorando durante la sesión</label>
+              <label class="check-row"><input type="checkbox" id="flagAlteredGait"> Alteró la marcha</label>
+              <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
+              <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito o síntomas neurológicos</label>
+            </fieldset>
+            <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
+          </div>
+        </section>
+
+        <section data-close-step="3" hidden>
+          <div class="close-metric" id="maxRunBlockDisplay">
+            <span class="metric-label">Máx. continuo medido</span>
+            <strong id="sessionMaxRunBlockLabel">—</strong>
+            <small>Mayor tramo de carrera sin caminar.</small>
+            <small id="sessionExtraLabel" hidden></small>
+          </div>
+          <div class="form-grid two">
+            <label>Fecha<input type="date" id="sessionDate"></label>
+            <label>Realizado en
+              <select id="sessionType">
+                <option value="Cinta">Cinta</option>
+                <option value="Exterior">Aire libre</option>
+              </select>
+            </label>
+            <label>Tiempo<input type="text" id="sessionTime" placeholder="38:12" inputmode="numeric" autocomplete="off"></label>
+            <label>Distancia
+              <span class="input-unit">
+                <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
+                <span>km</span>
+              </span>
+              <small class="field-hint" id="distanceHint">Si viene del timer, arranca como estimada hasta que la confirmes.</small>
+            </label>
+          </div>
+          <div class="distance-confirm-row" id="distanceConfirmRow">
+            <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
+            <button type="button" class="quiet-button" id="confirmDistanceBtn">Confirmar distancia real</button>
+          </div>
+          <fieldset class="choice-fieldset">
+            <legend>¿Podías seguir corriendo?</legend>
+            <div class="choice-row wrap">
+              <label><input type="radio" name="couldContinue" value="no"> No</label>
+              <label><input type="radio" name="couldContinue" value="2-5"> Sí, un poco</label>
+              <label><input type="radio" name="couldContinue" value="5plus"> Sí, bastante</label>
+            </div>
+            <p class="field-hint">Esto describe tu margen. No suma minutos al tiempo continuo.</p>
+          </fieldset>
+          <label>Notas<input type="text" id="sessionNotes" placeholder="Opcional"></label>
+        </section>
+      </div>
+
+      <div class="modal-actions modal-actions-sticky">
         <button class="quiet-button" type="button" id="closeBack">Atrás</button>
         <button class="primary-button accent-button" type="button" id="closeNext">Siguiente</button>
         <button class="primary-button accent-button" type="button" id="saveSession" hidden>Guardar entrenamiento</button>
