@@ -48,11 +48,11 @@
       "total": 38,
       "rpe": 3,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "2:30 correr / 2 min caminar ×6",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 7 → 6 · Tiempo total corriendo: 14 → 15 min · Tiempo total: 38 → 37 min",
-      "reason": "Buena tolerancia: aumentamos una variable de carga con límite conservador."
+      "diff": "Bloque continuo: +30 s (2 min → 2:30) · Repeticiones: 7 → 6 · Carrera acumulada: 14 min → 15 min · Tiempo total: 38 → 37 min",
+      "reason": "Buena tolerancia: aumentamos una dimensión de carga con límite conservador."
     },
     {
       "profile": "A",
@@ -66,10 +66,10 @@
       "total": 37,
       "rpe": 4,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "3 min correr / 2 min caminar ×5",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 6 → 5 · Tiempo total: 37 → 35 min",
+      "diff": "Bloque continuo: +30 s (2:30 → 3 min) · Repeticiones: 6 → 5 · Tiempo total: 37 → 35 min",
       "reason": "Tolerancia adecuada y tendencia favorable: progresamos."
     },
     {
@@ -84,11 +84,11 @@
       "total": 35,
       "rpe": 3,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "3:30 correr / 2 min caminar ×4",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 5 → 4 · Tiempo total corriendo: 15 → 14 min · Tiempo total: 35 → 32 min",
-      "reason": "Buena tolerancia: aumentamos una variable de carga con límite conservador."
+      "diff": "Bloque continuo: +30 s (3 min → 3:30) · Repeticiones: 5 → 4 · Carrera acumulada: 15 min → 14 min · Tiempo total: 35 → 32 min",
+      "reason": "Buena tolerancia: aumentamos una dimensión de carga con límite conservador."
     },
     {
       "profile": "A",
@@ -102,10 +102,10 @@
       "total": 32,
       "rpe": 4,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "4 min correr / 2 min caminar ×4",
-      "diff": "Bloque continuo: +30 s · Tiempo total corriendo: 14 → 16 min · Tiempo total: 32 → 34 min",
+      "diff": "Bloque continuo: +30 s (3:30 → 4 min) · Carrera acumulada: 14 min → 16 min · Tiempo total: 32 → 34 min",
       "reason": "Tolerancia adecuada y tendencia favorable: progresamos."
     }
   ],
@@ -143,7 +143,7 @@
       "action": "reduce",
       "progression": "advance",
       "next": "2 min correr / 2 min caminar ×6",
-      "diff": "Repeticiones: 7 → 6 · Tiempo total corriendo: 14 → 12 min · Tiempo total: 38 → 34 min",
+      "diff": "Repeticiones: 7 → 6 · Carrera acumulada: 14 min → 12 min · Tiempo total: 38 → 34 min",
       "reason": "Sesión incompleta y muy exigente: bajamos la carga en la próxima."
     },
     {
@@ -179,7 +179,7 @@
       "action": "reduce",
       "progression": "advance",
       "next": "2 min correr / 2 min caminar ×5",
-      "diff": "Repeticiones: 6 → 5 · Tiempo total corriendo: 12 → 10 min · Tiempo total: 34 → 30 min",
+      "diff": "Repeticiones: 6 → 5 · Carrera acumulada: 12 min → 10 min · Tiempo total: 34 → 30 min",
       "reason": "Sesión incompleta y muy exigente: bajamos la carga en la próxima."
     },
     {
@@ -322,11 +322,11 @@
       "total": 38,
       "rpe": 3,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "2:30 correr / 2 min caminar ×6",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 7 → 6 · Tiempo total corriendo: 14 → 15 min · Tiempo total: 38 → 37 min",
-      "reason": "Buena tolerancia: aumentamos una variable de carga con límite conservador."
+      "diff": "Bloque continuo: +30 s (2 min → 2:30) · Repeticiones: 7 → 6 · Carrera acumulada: 14 min → 15 min · Tiempo total: 38 → 37 min",
+      "reason": "Buena tolerancia: aumentamos una dimensión de carga con límite conservador."
     }
   ],
   "D": [
@@ -378,28 +378,28 @@
       "total": 38,
       "rpe": 4,
       "completed": true,
-      "action": "progress",
+      "action": "reassess",
       "progression": "advance",
-      "next": "2:30 correr / 2 min caminar ×6",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 7 → 6 · Tiempo total corriendo: 14 → 15 min · Tiempo total: 38 → 37 min",
-      "reason": "Tolerancia adecuada y tendencia favorable: progresamos."
+      "next": "2 min correr / 2 min caminar ×5",
+      "diff": "Repeticiones: 7 → 5 · Carrera acumulada: 14 min → 10 min · Tiempo total: 38 → 30 min",
+      "reason": "Tras 17 días sin entrenar, recalibramos sin borrar el historial."
     },
     {
       "profile": "D",
       "i": 3,
       "date": "2026-10-24",
-      "prescribed": "2:30 correr / 2 min caminar ×6",
-      "continuous": 150,
-      "totalRun": 900,
-      "walk": 720,
-      "reps": 6,
-      "total": 37,
+      "prescribed": "2 min correr / 2 min caminar ×5",
+      "continuous": 120,
+      "totalRun": 600,
+      "walk": 600,
+      "reps": 5,
+      "total": 30,
       "rpe": 4,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
-      "next": "3 min correr / 2 min caminar ×5",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 6 → 5 · Tiempo total: 37 → 35 min",
+      "next": "2:30 correr / 2 min caminar ×4",
+      "diff": "Bloque continuo: +30 s (2 min → 2:30) · Repeticiones: 5 → 4 · Tiempo total: 30 → 28 min",
       "reason": "Tolerancia adecuada y tendencia favorable: progresamos."
     }
   ],
@@ -452,11 +452,11 @@
       "total": 38,
       "rpe": 3,
       "completed": true,
-      "action": "progress",
+      "action": "progress_continuous",
       "progression": "advance",
       "next": "2:30 correr / 2 min caminar ×6",
-      "diff": "Bloque continuo: +30 s · Repeticiones: 7 → 6 · Tiempo total corriendo: 14 → 15 min · Tiempo total: 38 → 37 min",
-      "reason": "Buena tolerancia: aumentamos una variable de carga con límite conservador."
+      "diff": "Bloque continuo: +30 s (2 min → 2:30) · Repeticiones: 7 → 6 · Carrera acumulada: 14 min → 15 min · Tiempo total: 38 → 37 min",
+      "reason": "Buena tolerancia: aumentamos una dimensión de carga con límite conservador."
     }
   ]
 }

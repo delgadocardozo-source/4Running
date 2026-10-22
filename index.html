@@ -121,6 +121,8 @@
             <span id="readinessConfidence">Confianza baja</span>
           </div>
           <div class="goal-bar" id="readinessBar" aria-hidden="true"><span></span></div>
+          <p class="goal-explain" id="confidenceExplain" hidden></p>
+          <p class="goal-explain caution" id="cautionExplain" hidden></p>
           <p class="goal-check">Checkpoint <strong id="checkpointLabel">25 oct</strong> <span id="checkpointCountdown"></span></p>
           <button class="text-button" id="goalDetailToggle" type="button">Detalle</button>
           <p class="evidence-need" id="evidenceNeed" hidden></p>
@@ -293,7 +295,7 @@
   </div>
 
   <dialog id="sessionDialog" class="modal">
-    <form method="dialog" class="modal-card" id="sessionForm">
+    <form method="dialog" class="modal-card" id="sessionForm" novalidate>
       <div class="modal-heading">
         <div>
           <span class="eyebrow" id="closeEyebrow">Cierre</span>
@@ -408,7 +410,7 @@
       <div class="modal-actions">
         <button class="quiet-button" type="button" id="closeBack">Atrás</button>
         <button class="primary-button accent-button" type="button" id="closeNext">Siguiente</button>
-        <button class="primary-button accent-button" type="submit" id="saveSession" hidden>Guardar entrenamiento</button>
+        <button class="primary-button accent-button" type="button" id="saveSession" hidden>Guardar entrenamiento</button>
       </div>
     </form>
   </dialog>

@@ -1,90 +1,84 @@
-# PACE/01 — Producto y motor adaptativo v4
+# PACE/01 — Motor adaptativo v4.1 (Fase 2)
 
-Entrenador de running por intervalos (PWA). El motor **no** depende de una lista fija de 10 sesiones: genera un horizonte móvil según el perfil funcional del atleta.
+Entrenador de running por intervalos (PWA). Evolución individual: caminar/trotar → carrera continua → 5K → rendimiento / 10K / mantenimiento.
 
-## A. Arquitectura
+## 1. Resumen de cambios (Fase 2)
 
-| Capa | Archivo | Rol |
-|------|---------|-----|
-| Generador + perfil + carga | `adaptive-engine.js` | `PaceAdaptive` — puro, testeable, reloj inyectable |
-| Fachada / persistencia | `coach-engine.js` | `PaceCoach` — localStorage, attempts, API UI |
-| UI / timer | `app.js` | Cierre, adaptación explicable, HUD |
-| Caché PWA | `sw.js` | `pace01-v2.0.0` incluye `adaptive-engine.js` |
+- Progresión multidimensional (`continuous` | `volume` | `performance` | `recovery` | `consistency`).
+- Acciones: `progress_continuous`, `progress_volume`, `progress_performance`, `consolidate`, `repeat`, `reduce`, `recovery`, `reassess`.
+- Escalera de continuo hasta 20–30+ min (no lista fija); fusión a carrera continua cuando corresponde.
+- Explicación continuo↑ / volumen↓ (no es pérdida de rendimiento).
+- Sugerencias de velocidad **con aceptación explícita** (nunca silenciosas).
+- Calendario con `scheduledDate`, descanso entre corridas, sin dos corridas el mismo día.
+- UX: recuperación “habilita el próximo”; confianza ≠ precaución.
+- Reloj de pruebas: `window.PaceTestClock`.
+- SW `pace01-v2.1.0`.
 
-Flujo: cierre de sesión → `decideAdaptive` → attempt (ejecución + acción) → si `advance` regenera horizonte pendiente sin reescribir historial.
+## 2. Reglas deportivas y referencias
 
-Claves: `pace01.plan.v3` (contenido versionado a plan.version=4), `pace01.logs.v3`, `pace01.settings.v1`.
+| Referencia | Criterio usado | Qué no atribuimos |
+|------------|----------------|-------------------|
+| NHS Couch to 5K (UK) | Progresión gradual a continuo; ~3 sesiones/sem; consolidación | Calendario fijo de 9 semanas |
+| Jeff Galloway, Run Walk Run | Alternancia estratégica; caminatas no se eliminan solo por mejorar | Ratios propietarios exactos |
+| CDC Physical Activity Basics | RPE / talk test como intensidad práctica | FC obligatoria |
+| ACSM Guidelines (prescripción) | Individualización, progresión, FITT como marco | Umbrales clínicos exactos copiados |
+| Runna (docs públicas) | Adaptación a capacidad/pausas; pace insights como *idea de producto* | Algoritmos no públicos |
+| Garmin Run Coach (concepto público) | Personalización y recuperación | Lógica interna Garmin |
+| BJSM / gestión de carga | Precaución ante saltos bruscos de volumen/distancia | “Regla del 10%” como ley |
 
-## B. Reglas implementadas
+**Decisiones 4Running (configurables en `plan.params` / `DEFAULT_PARAMS`):** paso continuo 15–30–60–120 s según nivel; tope ~15 % volumen carrera; ventana tendencia 3; pausa reevaluación 10 días; merge a continuo desde ~8 min o pocas reps.
 
-Prioridad: **seguridad → cumplimiento → RPE → tendencia → límites de carga**.
+## 3. Arquitectura
 
-Acciones: `progress` | `consolidate` | `repeat` | `reduce` | `recovery` | `reassess`.
+| Módulo | Rol |
+|--------|-----|
+| `adaptive-engine.js` | Perfil, candidatos, decisión, calendario, velocidad, diffs |
+| `coach-engine.js` | Persistencia, attempts, `confirmNextSession`, accept/reject speed |
+| `app.js` | UI adaptación, confianza/precaución, `PaceTestClock` |
+| `tests/fase2-evolution.test.js` | 8–12 sem + A–H + 14d |
 
-Compat attempts: `progression` = `advance` | `repeat` | `recovery` + campo `adaptiveAction`.
+## 4. Archivos modificados
 
-Parámetros propios (`DEFAULT_PARAMS`, configurables en `plan.params`):
+`adaptive-engine.js`, `coach-engine.js`, `app.js`, `index.html`, `styles.css`, `sw.js`, `PRODUCT.md`, `tests/*`.
 
-- `continuousStepSec`: 30 (mín. 15)
-- `maxRunVolumeIncreasePct`: 15
-- `trendWindow`: 3 / `minGoodSessionsForProgress`: 2
-- `pauseDaysForReassess`: 10
-- `horizonPendingRuns`: 2
-- Una variable principal por transición (continuo / reps / walk), o reorganización continuo+reps si el volumen cabe
+## 5. Progresión continua
 
-## C. Bibliografía y trazabilidad
+Prioridad principiantes: **continuo** antes que velocidad. Candidatos: +paso, reorganizar (−reps/+continuo), acortar caminata, fusionar a `walkSeconds:0 ×1`. Tope de volumen; si continuo↑ y volumen↓ → dimensión `continuous` con texto explícito.
 
-| Fuente | Qué usamos | Qué NO atribuimos |
-|--------|------------|-------------------|
-| NHS Couch to 5K | Progresión walk/jog → continuo; ~3 sesiones/sem; consolidación | Calendario fijo de semanas |
-| Jeff Galloway Run-Walk-Run | Alternancia estratégica; no eliminar caminatas solo por mejorar | Ratios propietarios exactos |
-| CDC intensidad | RPE 1–10, talk test / percepción | Umbrales FC obligatorios |
-| Runna (pública) | Plan según capacidad, adaptación, pausas | Algoritmos internos no públicos |
-| BJSM carga | Precaución ante saltos bruscos de distancia/volumen | “Regla del 10%” como ley |
+## 6. Velocidades
 
-Los números de paso y % son **diseño 4Running**, no garantías clínicas.
+`suggestSpeed()`: keep / suggest_up. No estima ritmo de carrera desde distancia total mixta. No escribe `settings.runSpeed` sin `acceptSpeedSuggestion`.
 
-## D. Archivos tocados
+## 7. UX corregida
 
-- `adaptive-engine.js` (nuevo)
-- `coach-engine.js`, `app.js`, `index.html`, `styles.css`, `sw.js`
-- `tests/adaptive-engine.test.js`, `tests/simulation-14d-report.json`
-- `PRODUCT.md`
+- Recuperación: “habilitó el próximo entrenamiento” (no “no avanzó”).
+- Confianza = evidencia; Precaución = moderar carga; ambas visibles.
+- Diff con carrera acumulada + interpretación.
 
-## E. Migración
+## 8. Calendario
 
-`migratePlanToV4` es idempotente: conserva sesiones/attempts, marca `engineVersion`, rellena horizonte si no hay pendientes (corrige “PLAN AL DÍA”). No inventa distancias ni RPE ausentes.
+`allocateScheduleDates`: frecuencia/`minRestDaysBetweenRuns`; fechas en pendientes; reprogramar sigue siendo la misma sesión; tras pausa → `reassess`.
 
-## F. Pruebas
+## 9–12. Pruebas
 
 ```bash
 node tests/adaptive-engine.test.js
+node tests/fase2-evolution.test.js
 ```
 
-Perfiles A–G + límites de carga + migración. Informe JSON en `tests/simulation-14d-report.json`.
+Escenario A (28 sesiones favorables): **hasta 20 min continuo** en simulación. B no progresa. F/G no vuelven a 2/2×7. Informes: `tests/fase2-scenario-a.json`, `tests/fase2-sim-14d.json`.
 
-## G. Comparación 14 días (A vs B)
+## 13. Limitaciones
 
-Misma semilla `7×(2'/2')`. A (RPE 3–4) progresa el continuo (p. ej. 2:00 → 2:30×6 → 3:00…). B (RPE 8 / incompletas) repite o reduce reps. Prescripciones divergentes.
+- Sin GPS: segmentos de cinta no instrumentados → sugerencias de ritmo conservadoras.
+- Bloques mixtos heterogéneos: modelo listo (`blocks`), UI timer sigue en modo classic.
+- Prueba de 14 días “solo clic en navegador” automatizada vía misma API que la UI (`confirmNextSession` / `markRestComplete`); reloj `PaceTestClock` para UI manual.
 
-## H. Ejemplo generado
+## 14. Verificar en interfaz
 
-Anterior: `2 min correr / 2 min caminar ×7`  
-Nuevo: `2:30 correr / 2 min caminar ×6`  
-Cambio: continuo +30 s; carrera total 14→15 min; duración 38→37 min.
-
-## I. Limitaciones
-
-- Sin GPS: distancia estimada vs confirmada manual.
-- Velocidades de cinta siguen siendo manuales (sugerencia solo con evidencia futura).
-- Etapas 5–6 (tempo/10K) son base; se ampliarán sin romper el generador.
-- No es herramienta diagnóstica médica.
-
-## J. Verificar en UI
-
-1. Recargar (SW `v2.0.0`).
-2. Completar sesión con RPE 3–4 → pantalla de adaptación con **Progresar/Consolidar** y diff.
-3. RPE 7–8 → **Repetir**.
-4. Señal de seguridad → **Recuperación**.
-5. Agotar restos del plan v3 → siguen apareciendo sesiones nuevas.
-6. Historial intacto tras migración.
+1. Recargar (SW 2.1.0).
+2. Completar sesión RPE 3–4 → ver “Progresión de continuo” + interpretación si baja el volumen.
+3. Registrar recuperación → mensaje de habilitación.
+4. Historial: Confianza y Precaución separados.
+5. Consola (solo prueba): `PaceTestClock.setISO('2026-06-01')` para simular fechas.
+6. Si aparece sugerencia de velocidad, aceptar/rechazar; la config no cambia sola.

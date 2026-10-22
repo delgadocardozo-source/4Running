@@ -1,18 +1,22 @@
 /**
- * PACE/01 Adaptive Engine v4
- * Generador de prescripciones + perfil + límites de carga.
- * Reglas externas documentadas en PRODUCT.md (NHS C25K, Galloway, CDC RPE, Runna-like UX, BJSM load).
- * Parámetros numéricos propios de 4Running: DEFAULT_PARAMS (configurables).
+ * PACE/01 Adaptive Engine v4.1 (Fase 2)
+ * Evolución multidimensional, carrera continua, velocidades sugeridas, calendario.
+ * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.0.0';
+  const ENGINE_VERSION = '4.1.0';
 
-  /** Parámetros de diseño 4Running (no leyes científicas). */
+  /** Parámetros de diseño 4Running (configurables; no leyes científicas). */
   const DEFAULT_PARAMS = {
     beginnerSessionsPerWeek: 3,
+    sessionsPerWeek: 3,
+    minRestDaysBetweenRuns: 1,
     continuousStepSec: 30,
     continuousStepSecMin: 15,
+    continuousStepLongSec: 60,
+    continuousStepEasySec: 120,
     maxRunVolumeIncreasePct: 15,
+    maxRunVolumeDecreaseExplainPct: 20,
     trendWindow: 3,
     minGoodSessionsForProgress: 2,
     pauseDaysForReassess: 10,
@@ -21,9 +25,27 @@
     coolSeconds: 300,
     defaultWalkSeconds: 120,
     maxReps: 12,
-    minReps: 4,
-    maxContinuousSec: 30 * 60,
-    minContinuousSec: 30
+    minReps: 3,
+    maxContinuousSec: 45 * 60,
+    minContinuousSec: 30,
+    continuousMergeThresholdSec: 8 * 60,
+    speedSuggestMinComparable: 3,
+    speedSuggestMaxDeltaKmh: 0.5,
+    speedSuggestMaxRpe: 4,
+    /** Hitos orientativos (no secuencia fija). */
+    continuousMilestonesSec: [120, 150, 180, 240, 300, 480, 600, 900, 1200, 1500, 1800]
+  };
+
+  const ACTION_LABELS = {
+    progress: 'Progresar',
+    progress_continuous: 'Progresión de continuo',
+    progress_volume: 'Progresión de volumen',
+    progress_performance: 'Progresión de rendimiento',
+    consolidate: 'Consolidar',
+    repeat: 'Repetir',
+    reduce: 'Reducir carga',
+    recovery: 'Recuperación',
+    reassess: 'Reevaluar'
   };
 
   let clock = () => new Date();
@@ -38,6 +60,11 @@
     const m = String(date.getMonth() + 1).padStart(2, '0');
     const d = String(date.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
+  }
+  function addDaysISO(iso, n) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    const dt = new Date(y, m - 1, d + n);
+    return localDateISO(dt);
   }
 
   function clone(v) {
@@ -57,18 +84,47 @@
   }
 
   function structureFromClassic(st) {
+    if (!st || st.rest) return st;
+    const walkRaw = st.walkSeconds;
+    const walkSeconds = walkRaw == null || walkRaw === ''
+      ? DEFAULT_PARAMS.defaultWalkSeconds
+      : Number(walkRaw);
     return {
-      mode: 'classic',
+      mode: st.mode || 'classic',
       warmSeconds: Number(st.warmSeconds) || DEFAULT_PARAMS.warmSeconds,
       coolSeconds: Number(st.coolSeconds) || DEFAULT_PARAMS.coolSeconds,
       runSeconds: Number(st.runSeconds) || 120,
-      walkSeconds: Number(st.walkSeconds) || DEFAULT_PARAMS.defaultWalkSeconds,
-      reps: Number(st.reps) || 7
+      walkSeconds: Number.isFinite(walkSeconds) ? walkSeconds : DEFAULT_PARAMS.defaultWalkSeconds,
+      reps: Number(st.reps) || 7,
+      blocks: Array.isArray(st.blocks) ? st.blocks : null
     };
   }
 
   function metrics(st) {
     const s = structureFromClassic(st);
+    if (s.blocks && s.blocks.length) {
+      let totalRun = 0;
+      let totalWalk = 0;
+      let continuousSec = 0;
+      for (const b of s.blocks) {
+        if (b.type === 'run') {
+          totalRun += Number(b.seconds) || 0;
+          continuousSec = Math.max(continuousSec, Number(b.seconds) || 0);
+        } else if (b.type === 'walk') {
+          totalWalk += Number(b.seconds) || 0;
+        }
+      }
+      const total = s.warmSeconds + s.coolSeconds + totalRun + totalWalk;
+      return {
+        ...s,
+        totalRunSec: totalRun,
+        totalWalkSec: totalWalk,
+        totalSec: total,
+        continuousSec,
+        totalMin: Math.round(total / 60),
+        isContinuous: totalWalk === 0 && continuousSec > 0
+      };
+    }
     const totalRun = s.runSeconds * s.reps;
     const totalWalk = s.walkSeconds * s.reps;
     const total = s.warmSeconds + s.coolSeconds + totalRun + totalWalk;
@@ -78,7 +134,8 @@
       totalWalkSec: totalWalk,
       totalSec: total,
       continuousSec: s.runSeconds,
-      totalMin: Math.round(total / 60)
+      totalMin: Math.round(total / 60),
+      isContinuous: s.walkSeconds === 0 && s.reps === 1
     };
   }
 
@@ -87,24 +144,34 @@
     const walk = Number(speeds.walkSpeed) || 5;
     const run = Number(speeds.runSpeed) || 7.5;
     const cool = Number(speeds.coolSpeed) || 4.5;
-    return (walk * s.warmSeconds + cool * s.coolSeconds + (run * s.runSeconds + walk * s.walkSeconds) * s.reps) / 3600;
+    const m = metrics(s);
+    return (walk * s.warmSeconds + cool * s.coolSeconds + run * m.totalRunSec + walk * m.totalWalkSec) / 3600;
+  }
+
+  function formatBlockSec(sec) {
+    const m = Math.floor(sec / 60);
+    const r = sec % 60;
+    if (r === 0) return `${m} min`;
+    return `${m}:${String(r).padStart(2, '0')}`;
   }
 
   function describeStructure(st) {
     if (!st || st.rest) return 'Recuperación';
     const s = structureFromClassic(st);
-    const fmt = (sec) => {
-      const m = Math.floor(sec / 60);
-      const r = sec % 60;
-      if (r === 0) return `${m} min`;
-      return `${m}:${String(r).padStart(2, '0')}`;
-    };
-    return `${fmt(s.runSeconds)} correr / ${fmt(s.walkSeconds)} caminar ×${s.reps}`;
+    if (s.blocks && s.blocks.length) {
+      return s.blocks.map(b => `${formatBlockSec(b.seconds)} ${b.type === 'run' ? 'correr' : 'caminar'}`).join(' · ');
+    }
+    if (!s.walkSeconds) {
+      return s.reps === 1
+        ? `${formatBlockSec(s.runSeconds)} carrera continua`
+        : `${formatBlockSec(s.runSeconds)} carrera ×${s.reps} (sin caminata)`;
+    }
+    return `${formatBlockSec(s.runSeconds)} correr / ${formatBlockSec(s.walkSeconds)} caminar ×${s.reps}`;
   }
 
   function compareStructures(prev, next) {
     if (!prev || prev.rest || !next || next.rest) {
-      return { lines: [], summary: next?.rest ? 'Sesión de recuperación' : 'Cambio de tipo' };
+      return { lines: [], summary: next?.rest ? 'Sesión de recuperación' : 'Cambio de tipo', interpretation: null };
     }
     const a = metrics(prev);
     const b = metrics(next);
@@ -117,7 +184,7 @@
         from: a.continuousSec,
         to: b.continuousSec,
         deltaSec: d,
-        text: `Bloque continuo: ${d >= 0 ? '+' : ''}${d} s`
+        text: `Bloque continuo: ${d >= 0 ? '+' : ''}${d} s (${formatBlockSec(a.continuousSec)} → ${formatBlockSec(b.continuousSec)})`
       });
     }
     if (a.reps !== b.reps) {
@@ -137,17 +204,17 @@
         from: a.walkSeconds,
         to: b.walkSeconds,
         deltaSec: b.walkSeconds - a.walkSeconds,
-        text: `Caminata: ${a.walkSeconds}s → ${b.walkSeconds}s`
+        text: `Caminata: ${formatBlockSec(a.walkSeconds)} → ${formatBlockSec(b.walkSeconds)}`
       });
     }
     if (a.totalRunSec !== b.totalRunSec) {
       lines.push({
         key: 'totalRun',
-        label: 'Tiempo total corriendo',
+        label: 'Carrera acumulada',
         from: a.totalRunSec,
         to: b.totalRunSec,
         deltaSec: b.totalRunSec - a.totalRunSec,
-        text: `Tiempo total corriendo: ${Math.round(a.totalRunSec / 60)} → ${Math.round(b.totalRunSec / 60)} min`
+        text: `Carrera acumulada: ${formatBlockSec(a.totalRunSec)} → ${formatBlockSec(b.totalRunSec)}`
       });
     }
     if (a.totalMin !== b.totalMin) {
@@ -160,13 +227,50 @@
         text: `Tiempo total: ${a.totalMin} → ${b.totalMin} min`
       });
     }
+
+    const contUp = b.continuousSec > a.continuousSec;
+    const volDown = b.totalRunSec < a.totalRunSec;
+    const volUp = b.totalRunSec > a.totalRunSec;
+    let dimension = 'maintain';
+    let interpretation = 'Misma carga (consolidación).';
+    if (contUp && volDown) {
+      dimension = 'continuous';
+      interpretation = 'Aumentamos el tiempo de carrera continua y reducimos ligeramente el volumen acumulado para equilibrar la exigencia. No es una pérdida de rendimiento.';
+    } else if (contUp && !volUp) {
+      dimension = 'continuous';
+      interpretation = 'Priorizamos resistencia continua; el volumen acumulado se mantiene estable.';
+    } else if (contUp && volUp) {
+      dimension = 'continuous';
+      interpretation = 'Subimos el bloque continuo y el volumen de carrera dentro del tope de carga.';
+    } else if (volUp && !contUp) {
+      dimension = 'volume';
+      interpretation = 'Priorizamos volumen (más carrera acumulada) manteniendo el bloque continuo.';
+    } else if (a.walkSeconds > b.walkSeconds) {
+      dimension = 'continuous';
+      interpretation = 'Acortamos la caminata para acercarnos a carrera más sostenida, sin subir velocidad.';
+    } else if (b.isContinuous && !a.isContinuous) {
+      dimension = 'continuous';
+      interpretation = 'Pasamos a un bloque de carrera continua (sin caminata intercalada).';
+    } else if (lines.length === 0) {
+      dimension = 'maintain';
+      interpretation = 'Misma estructura: consolidamos la adaptación.';
+    } else if (volDown && !contUp) {
+      dimension = 'recovery_load';
+      interpretation = 'Reducimos la carga acumulada para recuperar tolerancia.';
+    }
+
     const primary = lines.find(l => l.key === 'continuous')
       || lines.find(l => l.key === 'reps')
       || lines.find(l => l.key === 'walk')
       || null;
+
     return {
       lines,
       primary,
+      dimension,
+      interpretation,
+      previousMetrics: a,
+      nextMetrics: b,
       sameLoad: lines.length === 0,
       summary: lines.length ? lines.map(l => l.text).join(' · ') : 'Misma carga (consolidación)'
     };
@@ -189,9 +293,52 @@
     return Math.round((b - a) / 86400000);
   }
 
-  /**
-   * Perfil funcional derivado (no inventa datos faltantes).
-   */
+  function assessCaution(logs = [], plan = null) {
+    const p = paramsOf(plan);
+    const valid = validTrainingLogs(logs);
+    const last = valid[0];
+    const reasons = [];
+    if (!last) {
+      return { level: 'none', label: null, reasons: ['Sin entrenamientos recientes para evaluar precaución.'] };
+    }
+    if (Number(last.rpe) >= 7) reasons.push(`Último RPE ${last.rpe}/10: esfuerzo alto.`);
+    if (last.pain) reasons.push('Molestia reportada en la última sesión.');
+    if (last.prescriptionCompleted === false || last.execution === 'aborted') {
+      reasons.push('La última prescripción no se completó.');
+    }
+    if (hasSafetyOverride(last)) reasons.push('Señal de seguridad en la última sesión.');
+    const gap = last.date ? daysBetween(last.date, localDateISO()) : null;
+    if (gap != null && gap >= p.pauseDaysForReassess) {
+      reasons.push(`Pausa de ${gap} días: conviene reevaluar antes de subir carga.`);
+    }
+    const hardRecent = valid.slice(0, p.trendWindow).filter(l => Number(l.rpe) >= 7).length;
+    if (hardRecent >= 2) reasons.push('Varias sesiones recientes con RPE alto.');
+
+    if (!reasons.length) {
+      return { level: 'none', label: null, reasons: ['Sin factores de precaución activos.'] };
+    }
+    return {
+      level: hasSafetyOverride(last) || Number(last.rpe) >= 9 ? 'alta' : 'moderada',
+      label: 'Precaución',
+      reasons
+    };
+  }
+
+  function priorityDimensionFor(profile, plan) {
+    const goal = plan?.goal?.type || profile?.goalType || '5k_finish_runwalk';
+    const cont = profile?.demonstratedContinuousSec || 0;
+    if (profile?.needsReassess) return 'recovery';
+    if (goal === '5k_pb' || goal === 'performance' || goal === '10k') {
+      if (cont >= 20 * 60) return 'performance';
+      return 'continuous';
+    }
+    if (goal === 'maintenance' && cont >= 20 * 60) return 'consistency';
+    if (cont >= 30 * 60) return 'volume';
+    if (cont >= 20 * 60) return 'volume';
+    if (profile?.stage <= 4) return 'continuous';
+    return 'volume';
+  }
+
   function deriveProfile(logs = [], plan = null, settings = {}) {
     const p = paramsOf(plan);
     const valid = validTrainingLogs(logs);
@@ -201,6 +348,9 @@
       .map(l => Number(l.maxRunBlockSec) || 0)
       .filter(n => n > 0);
     const demonstratedContinuousSec = continuous.length ? Math.max(...continuous) : null;
+    const confirmedDistances = completed
+      .filter(l => typeof l.distanceKm === 'number' && l.distanceEstimated === false)
+      .map(l => l.distanceKm);
     const last = valid[0] || null;
     const lastDate = last?.date || null;
     const gapDays = lastDate ? daysBetween(lastDate, localDateISO()) : null;
@@ -211,6 +361,8 @@
     else if (demonstratedContinuousSec != null && demonstratedContinuousSec >= 15 * 60) stage = 4;
     else if (demonstratedContinuousSec != null && demonstratedContinuousSec >= 5 * 60) stage = 3;
     else stage = 2;
+
+    if ((plan?.goal?.type === '10k' || plan?.goal?.type === '5k_pb') && stage >= 5) stage = 6;
 
     const recent = valid.slice(0, p.trendWindow);
     const recentGood = recent.filter(l =>
@@ -231,8 +383,16 @@
     ).length;
 
     let confidence = 'baja';
-    if (withRpe.length >= 4 && continuous.length >= 3 && recent.length >= 3) confidence = 'alta';
-    else if (withRpe.length >= 2 && completed.length >= 2) confidence = 'media';
+    let confidenceNote = 'Información insuficiente o inconsistente para decidir con firmeza.';
+    if (withRpe.length >= 4 && continuous.length >= 3 && recent.length >= 3) {
+      confidence = 'alta';
+      confidenceNote = 'Tenemos suficiente información reciente y consistente para evaluar tu evolución.';
+    } else if (withRpe.length >= 2 && completed.length >= 2) {
+      confidence = 'media';
+      confidenceNote = 'Datos suficientes, con ciertas limitaciones.';
+    }
+
+    const caution = assessCaution(logs, plan);
 
     const lastRunItem = (plan?.sessions || [])
       .filter(s => s.kind === 'run' && s.status === 'completed')
@@ -248,7 +408,7 @@
       }
     );
 
-    return {
+    const profile = {
       engineVersion: ENGINE_VERSION,
       stage,
       stageLabel: ({
@@ -260,11 +420,14 @@
         6: 'Objetivos posteriores'
       })[stage] || 'Caminar y trotar',
       demonstratedContinuousSec,
+      maxConfirmedDistanceKm: confirmedDistances.length ? Math.max(...confirmedDistances) : null,
       sessionsCompleted: completed.length,
       recentGood,
       recentHard,
       recentCount: recent.length,
       confidence,
+      confidenceNote,
+      caution,
       gapDays,
       needsReassess: gapDays != null && gapDays >= p.pauseDaysForReassess,
       baselineStructure,
@@ -274,6 +437,8 @@
       coolSpeed: settings.coolSpeed,
       updatedAt: localDateISO()
     };
+    profile.priorityDimension = priorityDimensionFor(profile, plan);
+    return profile;
   }
 
   function hasSafetyOverride(log) {
@@ -303,15 +468,22 @@
     return { ok: true, reason: 'Tendencia favorable en la ventana reciente.', sampleSize: valid.length };
   }
 
+  function mapProgressAction(profile, plan) {
+    const dim = priorityDimensionFor(profile, plan);
+    if (dim === 'performance') return 'progress_performance';
+    if (dim === 'volume') return 'progress_volume';
+    return 'progress_continuous';
+  }
+
   /**
-   * Decisión adaptativa: progress | consolidate | repeat | reduce | recovery | reassess
-   * Compat: progress/consolidate/reduce → progression advance; repeat; recovery
+   * Decisión adaptativa (conserva comportamiento Fase 1 validado).
    */
   function decideAdaptive(log, priorLogs = [], plan = null) {
     const profile = deriveProfile([log, ...(priorLogs || [])], plan, {});
     const reasonCode = [];
     const completed = log.prescriptionCompleted !== false && log.execution !== 'aborted';
     const rpe = Number(log.rpe);
+    const caution = assessCaution([log, ...(priorLogs || [])], plan);
 
     if (hasSafetyOverride(log)) {
       reasonCode.push('SAFETY_OVERRIDE');
@@ -321,7 +493,9 @@
         reason: 'Señal de seguridad: priorizamos recuperación antes de subir carga.',
         medicalNotice: Boolean(log.severeWarning),
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
     if (hasModeratePain(log)) {
@@ -332,21 +506,24 @@
         reason: 'Molestia relevante: recuperación antes de volver a la misma carga.',
         medicalNotice: false,
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
     if (!completed) {
       reasonCode.push('PRESCRIPTION_INCOMPLETE');
       const action = rpe >= 8 ? 'reduce' : 'repeat';
       return {
-        action: action === 'reduce' ? 'reduce' : 'repeat',
+        action,
         progression: action === 'reduce' ? 'advance' : 'repeat',
-        adaptiveOnly: action,
         reason: action === 'reduce'
           ? 'Sesión incompleta y muy exigente: bajamos la carga en la próxima.'
           : 'No se completó la prescripción: repetimos este estímulo. Un RPE bajo no compensa un entrenamiento incompleto.',
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
 
@@ -357,7 +534,9 @@
         progression: 'repeat',
         reason: 'Hubo molestia leve: mantenemos este nivel.',
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
 
@@ -368,7 +547,9 @@
         progression: 'advance',
         reason: 'Esfuerzo muy alto: bajamos la carga para recuperar tolerancia.',
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
     if (rpe >= 7) {
@@ -378,11 +559,33 @@
         progression: 'repeat',
         reason: 'Esfuerzo alto: repetimos este estímulo sin aumentar.',
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'recovery'
       };
     }
 
-    // Poca evidencia: consolidar solo si el estímulo fue tolerable (RPE ya filtrado arriba).
+    // Pausas: medir hueco respecto al entrenamiento ANTERIOR (no el actual).
+    {
+      const priorValid = validTrainingLogs(priorLogs);
+      const lastPrior = priorValid[0];
+      const gapPrior = lastPrior?.date
+        ? daysBetween(lastPrior.date, log.date || localDateISO())
+        : null;
+      if (gapPrior != null && gapPrior >= paramsOf(plan).pauseDaysForReassess) {
+        reasonCode.push('PAUSE_REASSESS');
+        return {
+          action: 'reassess',
+          progression: 'advance',
+          reason: `Tras ${gapPrior} días sin entrenar, recalibramos sin borrar el historial.`,
+          reasonCode,
+          profile: { ...profile, gapDays: gapPrior, needsReassess: true },
+          caution,
+          priorityDimension: 'recovery'
+        };
+      }
+    }
+
     if (profile.confidence === 'baja' && validTrainingLogs([log, ...priorLogs]).length < 2) {
       reasonCode.push('LOW_EVIDENCE');
       return {
@@ -390,21 +593,26 @@
         progression: 'advance',
         reason: 'Todavía hay poca evidencia: consolidamos este nivel antes de subir.',
         reasonCode,
-        profile
+        profile,
+        caution,
+        priorityDimension: 'consistency'
       };
     }
 
     if (rpe === 6) {
       const trend = trendFavorable(priorLogs, plan);
       if (trend.ok && profile.recentGood >= 1) {
+        const action = mapProgressAction(profile, plan);
         reasonCode.push('RPE_6_TREND_OK');
         return {
-          action: 'progress',
+          action,
           progression: 'advance',
           reason: `Esfuerzo moderado-alto con tendencia aceptable: progresamos con cuidado. ${trend.reason}`,
           reasonCode,
           profile,
-          trend
+          trend,
+          caution,
+          priorityDimension: profile.priorityDimension
         };
       }
       reasonCode.push('RPE_6_HOLD');
@@ -414,33 +622,41 @@
         reason: `Esfuerzo 6: consolidamos. ${trend.reason}`,
         reasonCode,
         profile,
-        trend
+        trend,
+        caution,
+        priorityDimension: 'consistency'
       };
     }
 
     // RPE 1–5
     const trend = trendFavorable([log, ...priorLogs], plan);
     if (rpe <= 3 && (trend.ok || profile.recentGood >= 1 || profile.sessionsCompleted >= 1)) {
+      const action = mapProgressAction(profile, plan);
       reasonCode.push('RPE_LOW_PROGRESS');
       return {
-        action: 'progress',
+        action,
         progression: 'advance',
-        reason: 'Buena tolerancia: aumentamos una variable de carga con límite conservador.',
+        reason: 'Buena tolerancia: aumentamos una dimensión de carga con límite conservador.',
         reasonCode,
         profile,
-        trend
+        trend,
+        caution,
+        priorityDimension: profile.priorityDimension
       };
     }
     if (rpe <= 5) {
       if (trend.ok && profile.recentGood >= paramsOf(plan).minGoodSessionsForProgress) {
+        const action = mapProgressAction(profile, plan);
         reasonCode.push('RPE_MID_PROGRESS');
         return {
-          action: 'progress',
+          action,
           progression: 'advance',
           reason: 'Tolerancia adecuada y tendencia favorable: progresamos.',
           reasonCode,
           profile,
-          trend
+          trend,
+          caution,
+          priorityDimension: profile.priorityDimension
         };
       }
       reasonCode.push('RPE_MID_CONSOLIDATE');
@@ -450,7 +666,9 @@
         reason: 'Sesión bien tolerada: consolidamos este nivel (una sola sesión buena no basta para un salto grande).',
         reasonCode,
         profile,
-        trend
+        trend,
+        caution,
+        priorityDimension: 'consistency'
       };
     }
 
@@ -460,16 +678,30 @@
       progression: 'repeat',
       reason: 'Mantenemos este estímulo.',
       reasonCode,
-      profile
+      profile,
+      caution,
+      priorityDimension: 'consistency'
     };
   }
 
-  function withinLoadLimits(base, candidate, params, stage) {
+  function continuousStepFor(baseSec, params, profile) {
+    if (baseSec >= 15 * 60) return params.continuousStepEasySec;
+    if (baseSec >= 8 * 60 || (profile?.stage >= 4 && baseSec >= 5 * 60)) return params.continuousStepLongSec;
+    return params.continuousStepSec;
+  }
+
+  function nextMilestone(currentSec, milestones) {
+    return milestones.find(m => m > currentSec) || null;
+  }
+
+  function withinLoadLimits(base, candidate, params, stage, opts = {}) {
     const a = metrics(base);
     const b = metrics(candidate);
     const runDeltaPct = a.totalRunSec > 0 ? ((b.totalRunSec - a.totalRunSec) / a.totalRunSec) * 100 : 0;
     const contDelta = b.continuousSec - a.continuousSec;
-    const stepCap = stage <= 3 ? params.continuousStepSec : params.continuousStepSec * 2;
+    const stepCap = opts.stepCap != null
+      ? opts.stepCap
+      : (stage <= 3 ? params.continuousStepSec : Math.max(params.continuousStepSec, params.continuousStepLongSec));
 
     if (contDelta > stepCap) {
       return { ok: false, reason: `Continuo +${contDelta}s supera el paso máximo (${stepCap}s).` };
@@ -481,10 +713,11 @@
     if (a.continuousSec !== b.continuousSec) changed.push('continuous');
     if (a.reps !== b.reps) changed.push('reps');
     if (a.walkSeconds !== b.walkSeconds) changed.push('walk');
-    if (changed.length > 1) {
+    if (!opts.allowMulti && changed.length > 1) {
       return { ok: false, reason: 'Más de una variable principal de dificultad cambió a la vez.' };
     }
-    if (b.reps > params.maxReps || b.reps < params.minReps) {
+    const minReps = b.walkSeconds === 0 ? 1 : params.minReps;
+    if (b.reps > params.maxReps || b.reps < minReps) {
       return { ok: false, reason: 'Repeticiones fuera de rango.' };
     }
     if (b.continuousSec > params.maxContinuousSec || b.continuousSec < params.minContinuousSec) {
@@ -498,7 +731,6 @@
     return { structure: st, label, primaryVar, metrics: metrics(st) };
   }
 
-  /** Estructura base según etapa (no inventa capacidades no demostradas). */
   function structureForProfile(profile, fallback) {
     const params = DEFAULT_PARAMS;
     if (profile?.stage >= 5 && profile.demonstratedContinuousSec >= 20 * 60) {
@@ -519,33 +751,41 @@
         params.minContinuousSec,
         Math.round(profile.demonstratedContinuousSec * 0.7 / 15) * 15
       );
+      const asContinuous = soft >= 8 * 60;
       return structureFromClassic({
         warmSeconds: params.warmSeconds,
         coolSeconds: params.coolSeconds,
-        runSeconds: Math.min(soft, 5 * 60),
-        walkSeconds: profile.demonstratedContinuousSec >= 5 * 60 ? 60 : params.defaultWalkSeconds,
-        reps: profile.demonstratedContinuousSec >= 5 * 60 ? 1 : 6
+        runSeconds: Math.min(soft, asContinuous ? soft : 5 * 60),
+        walkSeconds: asContinuous ? 0 : (profile.demonstratedContinuousSec >= 5 * 60 ? 60 : params.defaultWalkSeconds),
+        reps: asContinuous ? 1 : (profile.demonstratedContinuousSec >= 5 * 60 ? 1 : 6)
       });
     }
     return structureFromClassic(fallback || profile?.baselineStructure);
   }
 
+  function normalizeProgressAction(action) {
+    if (action === 'progress') return 'progress_continuous';
+    return action;
+  }
+
   function generateCandidates(baseStructure, action, profile, plan) {
     const params = paramsOf(plan);
     let base = structureFromClassic(baseStructure);
+    const rawAction = normalizeProgressAction(action);
     if (profile?.stage >= 5 && base.walkSeconds > 0 && profile.demonstratedContinuousSec >= 20 * 60) {
       base = structureForProfile(profile, base);
     }
-    if (action === 'reassess') {
+    if (rawAction === 'reassess') {
       base = structureForProfile({ ...profile, needsReassess: true }, base);
     }
     const list = [];
+    const step = continuousStepFor(base.runSeconds, params, profile);
 
-    if (action === 'repeat' || action === 'consolidate') {
+    if (rawAction === 'repeat' || rawAction === 'consolidate') {
       list.push(candidate(base, {}, 'Misma carga', null));
     }
-    if (action === 'reduce') {
-      if (base.reps > params.minReps) {
+    if (rawAction === 'reduce') {
+      if (base.reps > (base.walkSeconds === 0 ? 1 : params.minReps)) {
         list.push(candidate(base, { reps: base.reps - 1 }, 'Una repetición menos', 'reps'));
       }
       if (base.runSeconds - params.continuousStepSecMin >= params.minContinuousSec) {
@@ -556,53 +796,116 @@
       }
       list.push(candidate(base, {}, 'Misma carga (si no hay reducción viable)', null));
     }
-    if (action === 'progress' || action === 'reassess') {
-      const step = profile.stage >= 5 && base.walkSeconds === 0
-        ? Math.max(params.continuousStepSec, 60)
-        : params.continuousStepSec;
-      list.push(candidate(base, { runSeconds: base.runSeconds + step }, `Continuo +${step}s`, 'continuous'));
-      if (base.reps < params.maxReps && base.walkSeconds > 0) {
-        list.push(candidate(base, { reps: base.reps + 1 }, 'Una repetición más', 'reps'));
+
+    const wantContinuous = rawAction === 'progress_continuous' || rawAction === 'progress' || rawAction === 'reassess';
+    const wantVolume = rawAction === 'progress_volume';
+    const wantPerf = rawAction === 'progress_performance';
+
+    if (wantContinuous || wantVolume || wantPerf || rawAction === 'progress') {
+      // Continuo + reorganización (prioridad principiantes / C25K)
+      if (wantContinuous || wantPerf || rawAction === 'progress') {
+        const milestone = nextMilestone(base.runSeconds, params.continuousMilestonesSec);
+        const targetCont = milestone && (milestone - base.runSeconds) <= step * 2
+          ? Math.min(base.runSeconds + step, milestone)
+          : base.runSeconds + step;
+
+        if (base.walkSeconds === 0) {
+          list.push(candidate(base, { runSeconds: Math.min(targetCont, params.maxContinuousSec) }, `Continuo +${step}s`, 'continuous'));
+        } else {
+          list.push(candidate(base, { runSeconds: targetCont }, `Continuo +${targetCont - base.runSeconds}s`, 'continuous'));
+          if (base.reps > params.minReps) {
+            list.push(candidate(base, {
+              reps: base.reps - 1,
+              runSeconds: targetCont
+            }, `Reorganizar: −1 rep y continuo más largo`, 'restructure'));
+          }
+          // Fusionar a carrera continua cuando el bloque es largo
+          if (base.runSeconds >= params.continuousMergeThresholdSec || (base.reps <= 3 && base.runSeconds >= 5 * 60)) {
+            const mergeSec = Math.min(
+              Math.max(base.runSeconds, Math.round(base.runSeconds * base.reps * 0.55)),
+              Math.round(base.runSeconds * base.reps * 1.0),
+              params.maxContinuousSec
+            );
+            const capped = Math.min(mergeSec, Math.round(metrics(base).totalRunSec * (1 + params.maxRunVolumeIncreasePct / 100)));
+            list.push(candidate(base, {
+              runSeconds: Math.max(base.runSeconds, capped),
+              walkSeconds: 0,
+              reps: 1
+            }, 'Pasar a carrera continua', 'restructure'));
+          }
+          if (base.walkSeconds >= 60) {
+            list.push(candidate(base, { walkSeconds: Math.max(0, base.walkSeconds - 30) }, 'Caminata más corta', 'walk'));
+          }
+        }
       }
-      // Variante: menos reps pero más continuo (reorganizar) — si el volumen cabe
-      if (base.reps > params.minReps && base.walkSeconds > 0) {
+
+      if (wantVolume || (!wantContinuous && rawAction === 'progress')) {
+        if (base.walkSeconds === 0) {
+          list.push(candidate(base, {
+            runSeconds: Math.min(base.runSeconds + params.continuousStepEasySec, params.maxContinuousSec)
+          }, 'Más duración fácil', 'continuous'));
+        } else if (base.reps < params.maxReps) {
+          list.push(candidate(base, { reps: base.reps + 1 }, 'Una repetición más', 'reps'));
+        }
+      }
+
+      if (wantPerf && base.walkSeconds === 0) {
+        // Intervalos de rendimiento ligeros: no cambiar velocidad aquí (solo estructura)
+        const work = Math.min(3 * 60, Math.max(60, Math.round(base.runSeconds / 6)));
+        const easy = Math.min(2 * 60, work);
+        const reps = 4;
+        list.push({
+          structure: structureFromClassic({
+            warmSeconds: params.warmSeconds,
+            coolSeconds: params.coolSeconds,
+            runSeconds: work,
+            walkSeconds: easy,
+            reps
+          }),
+          label: `Intervalos rendimiento ${formatBlockSec(work)}/${formatBlockSec(easy)} ×${reps}`,
+          primaryVar: 'performance',
+          metrics: metrics({
+            warmSeconds: params.warmSeconds,
+            coolSeconds: params.coolSeconds,
+            runSeconds: work,
+            walkSeconds: easy,
+            reps
+          })
+        });
         list.push(candidate(base, {
-          reps: base.reps - 1,
-          runSeconds: base.runSeconds + step
-        }, `Reorganizar: −1 rep y continuo +${step}s`, 'continuous'));
-      }
-      if (base.walkSeconds >= 90) {
-        list.push(candidate(base, { walkSeconds: base.walkSeconds - 30 }, 'Caminata un poco más corta', 'walk'));
+          runSeconds: Math.min(base.runSeconds + params.continuousStepEasySec, params.maxContinuousSec)
+        }, 'Fácil más largo (base aeróbica)', 'continuous'));
       }
     }
 
     const filtered = [];
     for (const c of list) {
-      if (action === 'repeat' || (action === 'consolidate' && c.primaryVar == null)) {
+      if (rawAction === 'repeat' || (rawAction === 'consolidate' && c.primaryVar == null)) {
         filtered.push({ ...c, limit: { ok: true } });
         continue;
       }
-      if (c.primaryVar == null && action === 'reduce') {
+      if (c.primaryVar == null && rawAction === 'reduce') {
         filtered.push({ ...c, limit: { ok: true } });
         continue;
       }
-      // reorganizar cambia continuo+reps → withinLoadLimits rechaza multi-var; skip or special-case
-      if (c.label.startsWith('Reorganizar')) {
+      if (c.primaryVar === 'restructure' || c.primaryVar === 'performance' || String(c.label).startsWith('Reorganizar') || String(c.label).startsWith('Pasar')) {
         const a = metrics(base);
         const b = c.metrics;
         const runDeltaPct = a.totalRunSec > 0 ? ((b.totalRunSec - a.totalRunSec) / a.totalRunSec) * 100 : 0;
         const contDelta = b.continuousSec - a.continuousSec;
-        const stepCap = profile.stage <= 3 ? params.continuousStepSec : params.continuousStepSec * 2;
-        if (contDelta <= stepCap && runDeltaPct <= params.maxRunVolumeIncreasePct) {
+        const stepCap = continuousStepFor(a.continuousSec, params, profile) * (c.primaryVar === 'performance' ? 3 : 2);
+        if (runDeltaPct <= params.maxRunVolumeIncreasePct + 0.5 && contDelta <= Math.max(stepCap, params.continuousStepEasySec)) {
           filtered.push({
             ...c,
-            limit: { ok: true, runDeltaPct, contDelta, changed: 'restructure' },
-            primaryVar: 'restructure'
+            limit: { ok: true, runDeltaPct, contDelta, changed: c.primaryVar || 'restructure' },
+            primaryVar: c.primaryVar || 'restructure'
           });
         }
         continue;
       }
-      const limit = withinLoadLimits(base, c.structure, params, profile.stage);
+      const limit = withinLoadLimits(base, c.structure, params, profile.stage || 2, {
+        stepCap: continuousStepFor(base.runSeconds, params, profile)
+      });
       if (limit.ok) filtered.push({ ...c, limit });
     }
 
@@ -614,13 +917,25 @@
 
   function pickCandidate(candidates, action) {
     if (!candidates.length) return null;
-    if (action === 'progress') {
-      return candidates.find(c => c.primaryVar === 'continuous')
+    const a = normalizeProgressAction(action);
+    if (a === 'progress_continuous' || a === 'progress') {
+      return candidates.find(c => c.primaryVar === 'restructure' && String(c.label).includes('continua'))
+        || candidates.find(c => c.primaryVar === 'continuous')
         || candidates.find(c => c.primaryVar === 'restructure')
-        || candidates.find(c => c.primaryVar === 'reps')
+        || candidates.find(c => c.primaryVar === 'walk')
         || candidates[0];
     }
-    if (action === 'reduce') {
+    if (a === 'progress_volume') {
+      return candidates.find(c => c.primaryVar === 'reps')
+        || candidates.find(c => c.primaryVar === 'continuous')
+        || candidates[0];
+    }
+    if (a === 'progress_performance') {
+      return candidates.find(c => c.primaryVar === 'performance')
+        || candidates.find(c => c.primaryVar === 'continuous')
+        || candidates[0];
+    }
+    if (a === 'reduce') {
       return candidates.find(c => c.primaryVar === 'reps')
         || candidates.find(c => c.primaryVar === 'continuous')
         || candidates[0];
@@ -633,7 +948,57 @@
     return max + 1;
   }
 
-  function makeRestItem(plan, note) {
+  function lastScheduledDate(plan) {
+    const dates = (plan.sessions || [])
+      .map(s => s.scheduledDate || s.completedDate || null)
+      .filter(Boolean)
+      .sort();
+    return dates.length ? dates[dates.length - 1] : null;
+  }
+
+  function allocateScheduleDates(plan, params) {
+    const gap = Math.max(1, Number(params.minRestDaysBetweenRuns) || 1);
+    let cursor = localDateISO();
+    const last = lastScheduledDate(plan);
+    if (last && last >= cursor) cursor = addDaysISO(last, gap);
+    else if (last) {
+      const since = daysBetween(last, cursor);
+      if (since != null && since < gap) cursor = addDaysISO(last, gap);
+    }
+
+    const open = [...(plan.sessions || [])]
+      .filter(s => s.status === 'pending' || s.status === 'rescheduled')
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    for (const item of open) {
+      if (item.kind === 'rest') {
+        if (!item.scheduledDate) {
+          item.scheduledDate = cursor;
+          cursor = addDaysISO(cursor, 1);
+        } else {
+          cursor = addDaysISO(item.scheduledDate, 1);
+        }
+        continue;
+      }
+      // run
+      if (!item.scheduledDate || item.status === 'pending') {
+        // No apilar varias corridas el mismo día
+        const used = new Set(
+          (plan.sessions || [])
+            .filter(s => s.id !== item.id && s.kind === 'run' && s.scheduledDate)
+            .map(s => s.scheduledDate)
+        );
+        while (used.has(cursor)) cursor = addDaysISO(cursor, 1);
+        item.scheduledDate = cursor;
+        cursor = addDaysISO(cursor, gap + 1);
+      } else {
+        cursor = addDaysISO(item.scheduledDate, gap + 1);
+      }
+    }
+    return plan;
+  }
+
+  function makeRestItem(plan, note, scheduledDate = null) {
     const order = nextOrder(plan);
     return {
       id: `rest-${Date.now()}-${order}`,
@@ -642,12 +1007,17 @@
       kind: 'rest',
       title: 'Recuperación',
       status: 'pending',
-      scheduledDate: null,
+      scheduledDate,
       blockedUntilRest: false,
-      structure: { rest: true, note: note || 'Descanso entre estímulos. La progresión se apoya en esto.' },
+      structure: {
+        rest: true,
+        note: note || 'Descanso entre estímulos. Completarlo habilita el próximo entrenamiento.'
+      },
       attempts: [],
       engineVersion: ENGINE_VERSION,
-      generated: true
+      generated: true,
+      sessionGoal: 'Recuperación',
+      primaryDimension: 'recovery'
     };
   }
 
@@ -660,7 +1030,7 @@
       weekGroup: Math.ceil(order / 4),
       order,
       kind: 'run',
-      title: meta.title || `Sesión adaptativa · ${describeStructure(st)}`,
+      title: meta.title || `Sesión · ${describeStructure(st)}`,
       status: 'pending',
       scheduledDate: meta.scheduledDate || null,
       blockedUntilRest: false,
@@ -668,13 +1038,16 @@
       attempts: [],
       engineVersion: ENGINE_VERSION,
       generated: true,
-      sessionGoal: meta.sessionGoal || 'Desarrollar tolerancia run/walk',
+      sessionGoal: meta.sessionGoal || 'Desarrollar tolerancia',
+      secondaryGoals: meta.secondaryGoals || [],
       justification: meta.justification || '',
       decisionAction: meta.action || null,
       changeSummary: meta.changeSummary || null,
+      primaryDimension: meta.primaryDimension || 'continuous',
       prescribedContinuousSec: m.continuousSec,
       prescribedTotalRunSec: m.totalRunSec,
-      estimatedDurationMin: m.totalMin
+      estimatedDurationMin: m.totalMin,
+      estimatedKm: meta.estimatedKm != null ? meta.estimatedKm : null
     };
   }
 
@@ -693,22 +1066,34 @@
     return (plan.sessions || []).filter(s => s.status === 'pending' || s.status === 'rescheduled');
   }
 
-  /**
-   * Tras una decisión, asegura horizonte de sesiones pendientes.
-   */
+  function sessionGoalFor(profile, action) {
+    const dim = profile.priorityDimension;
+    if (action === 'reassess') return 'Recalibrar tras pausa';
+    if (action === 'reduce' || action === 'recovery') return 'Recuperar tolerancia';
+    if (action === 'consolidate' || action === 'repeat') return 'Consolidar el estímulo actual';
+    if (dim === 'performance') return 'Mejorar rendimiento específico';
+    if (dim === 'volume') return 'Aumentar resistencia/volumen de forma sostenible';
+    if (profile.stage <= 2) return 'Construir tolerancia caminar/trotar';
+    if (profile.stage <= 4) return 'Desarrollar carrera continua';
+    return 'Mantener y mejorar condición';
+  }
+
   function ensureHorizon(plan, logs, settings, decision = null) {
     const profile = deriveProfile(logs, plan, settings || {});
     const params = paramsOf(plan);
     plan.athleteProfile = profile;
     plan.engineVersion = ENGINE_VERSION;
-    plan.version = 4;
+    plan.version = Math.max(4, Number(plan.version) || 4);
+    plan.params = { ...params, ...(plan.params || {}) };
 
-    // Si hay gate de recovery, no generar corridas encima
     const blocked = (plan.sessions || []).find(s => s.kind === 'run' && s.blockedUntilRest && (s.status === 'pending' || s.status === 'rescheduled'));
-    if (blocked) return plan;
+    if (blocked) {
+      allocateScheduleDates(plan, params);
+      return plan;
+    }
 
     let guard = 0;
-    while (pendingRuns(plan).length < params.horizonPendingRuns && guard < 6) {
+    while (pendingRuns(plan).length < params.horizonPendingRuns && guard < 8) {
       guard += 1;
       const base = lastCompletedRunStructure(plan)
         || pendingRuns(plan)[0]?.structure
@@ -716,83 +1101,191 @@
       const action = decision?.action
         || (profile.needsReassess ? 'reassess' : 'consolidate');
       const effectiveAction = action === 'repeat' ? 'consolidate' : action;
-      const candidates = generateCandidates(base, effectiveAction === 'recovery' ? 'consolidate' : effectiveAction, profile, plan);
-      const picked = pickCandidate(candidates, effectiveAction === 'recovery' ? 'consolidate' : effectiveAction);
+      const genAction = effectiveAction === 'recovery' ? 'consolidate' : effectiveAction;
+      const candidates = generateCandidates(base, genAction, profile, plan);
+      const picked = pickCandidate(candidates, genAction);
       const diff = compareStructures(base, picked.structure);
+      const speeds = {
+        walkSpeed: settings?.walkSpeed,
+        runSpeed: settings?.runSpeed,
+        coolSpeed: settings?.coolSpeed
+      };
 
-      // Descanso entre corridas para etapas tempranas si el último ítem abierto/cerrado fue un run
       const sorted = [...(plan.sessions || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
       const lastAny = sorted[sorted.length - 1];
-      if (profile.stage <= 4 && lastAny?.kind === 'run') {
-        plan.sessions.push(makeRestItem(plan, 'Recuperación entre estímulos (principio NHS C25K / Galloway).'));
+      if (profile.stage <= 5 && lastAny?.kind === 'run') {
+        plan.sessions.push(makeRestItem(plan, 'Recuperación entre estímulos (NHS C25K / Galloway).'));
       }
 
       plan.sessions.push(makeRunItem(plan, picked.structure, {
         action: effectiveAction,
-        justification: decision?.reason || `Generado por motor ${ENGINE_VERSION} · acción ${effectiveAction}.`,
+        justification: decision?.reason || `Motor ${ENGINE_VERSION} · ${ACTION_LABELS[effectiveAction] || effectiveAction}.`,
         changeSummary: diff,
-        sessionGoal: profile.stage <= 2
-          ? 'Construir tolerancia caminar/trotar'
-          : profile.stage <= 4
-            ? 'Desarrollar carrera continua hacia 5K'
-            : 'Mejorar rendimiento'
+        sessionGoal: sessionGoalFor(profile, effectiveAction),
+        primaryDimension: decision?.priorityDimension || profile.priorityDimension,
+        estimatedKm: estimateKm(picked.structure, speeds)
       }));
+
+      // Solo la primera generación tras una decisión usa esa decisión; el resto consolida
+      decision = { action: 'consolidate', reason: 'Horizonte: estímulo siguiente en consolidación.' };
     }
+
+    allocateScheduleDates(plan, params);
+    plan.pendingSpeedSuggestion = plan.pendingSpeedSuggestion || null;
     return plan;
+  }
+
+  /**
+   * Sugerencia de velocidad: nunca aplica sola.
+   * No estima ritmo de carrera desde distancia total de sesión mixta.
+   */
+  function suggestSpeed(logs, settings = {}, plan = null) {
+    const params = paramsOf(plan);
+    const profile = deriveProfile(logs, plan, settings);
+    const current = Number(settings.runSpeed) || 7.5;
+    const base = {
+      currentKmh: current,
+      suggestedKmh: null,
+      action: 'keep',
+      acceptRequired: true,
+      message: `Mantenemos tu velocidad de ${String(current).replace('.', ',')} km/h.`,
+      reasonCode: ['SPEED_KEEP']
+    };
+
+    if (profile.priorityDimension === 'continuous' && profile.stage <= 4) {
+      return {
+        ...base,
+        message: `Mantenemos tu velocidad de ${String(current).replace('.', ',')} km/h. Tu próxima mejora está enfocada en correr durante más tiempo sin caminar.`,
+        reasonCode: ['SPEED_KEEP_PRIORITIZE_CONTINUOUS']
+      };
+    }
+
+    const valid = validTrainingLogs(logs).slice(0, 6);
+    const comparable = valid.filter(l =>
+      l.prescriptionCompleted !== false &&
+      l.execution !== 'aborted' &&
+      Number(l.rpe) <= params.speedSuggestMaxRpe &&
+      !l.pain &&
+      !hasSafetyOverride(l)
+    );
+
+    if (comparable.length < params.speedSuggestMinComparable) {
+      return {
+        ...base,
+        message: `Todavía no hay evidencia suficiente para modificar tu velocidad de ${String(current).replace('.', ',')} km/h.`,
+        reasonCode: ['SPEED_INSUFFICIENT_EVIDENCE']
+      };
+    }
+
+    // Solo sugerir si hay distancias confirmadas en sesiones ya continuas (walk=0 prescrito no siempre disponible en log)
+    const continuousSessions = comparable.filter(l => Number(l.maxRunBlockSec) >= 15 * 60);
+    if (continuousSessions.length < 2) {
+      return {
+        ...base,
+        message: `Mantenemos ${String(current).replace('.', ',')} km/h. Priorizamos consolidar carrera continua antes de tocar el ritmo.`,
+        reasonCode: ['SPEED_KEEP_NEED_CONTINUOUS_BASE']
+      };
+    }
+
+    const confirmed = continuousSessions.filter(l =>
+      typeof l.distanceKm === 'number' &&
+      l.distanceEstimated === false &&
+      typeof l.elapsedSec === 'number' && l.elapsedSec > 0
+    );
+    // Sin segmentos separados no inventamos ritmo de carrera desde distancia mixta
+    if (confirmed.length < 2) {
+      return {
+        ...base,
+        message: `Tus últimas sesiones fueron cómodas, pero aún no hay datos de segmentos confiables para ajustar el ritmo. ¿Querés mantener ${String(current).replace('.', ',')} km/h?`,
+        reasonCode: ['SPEED_NO_SEGMENT_DATA']
+      };
+    }
+
+    const suggested = Math.round((current + params.speedSuggestMaxDeltaKmh) * 10) / 10;
+    return {
+      currentKmh: current,
+      suggestedKmh: suggested,
+      action: 'suggest_up',
+      acceptRequired: true,
+      message: `Tus últimas sesiones continuas fueron cómodas y consistentes. Podemos evaluar un pequeño ajuste a ${String(suggested).replace('.', ',')} km/h. ¿Querés probarlo?`,
+      reasonCode: ['SPEED_SUGGEST_UP'],
+      evidenceSessions: confirmed.length
+    };
   }
 
   function migratePlanToV4(plan, logs = [], settings = {}) {
     const next = clone(plan || { sessions: [] });
     if (!Array.isArray(next.sessions)) next.sessions = [];
-    if (next.version >= 4 && next.engineVersion) {
-      next.params = { ...DEFAULT_PARAMS, ...(next.params || {}) };
-      return ensureHorizon(next, logs, settings);
-    }
-    next.version = 4;
+    const already = next.version >= 4 && next.engineVersion;
+    next.version = Math.max(4, Number(next.version) || 4);
     next.engineVersion = ENGINE_VERSION;
     next.params = { ...DEFAULT_PARAMS, ...(next.params || {}) };
-    next.goal = next.goal || {
-      type: '5k_finish_runwalk',
-      label: 'Completar 5K con estrategia run/walk',
-      raceDate: next.raceDate || null,
-      checkpointDate: next.checkpointDate || null
-    };
-    next.fiveKDefinition = next.fiveKDefinition
-      || 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).';
-    next.migratedFrom = plan?.version || 3;
-    next.migratedAt = localDateISO();
+    if (!already) {
+      next.goal = next.goal || {
+        type: '5k_finish_runwalk',
+        label: 'Completar 5K con estrategia run/walk',
+        raceDate: next.raceDate || null,
+        checkpointDate: next.checkpointDate || null
+      };
+      next.fiveKDefinition = next.fiveKDefinition
+        || 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).';
+      next.migratedFrom = plan?.version || 3;
+      next.migratedAt = localDateISO();
+    }
+    // Normalizar walkSeconds 0 preservados
+    next.sessions = next.sessions.map(s => {
+      if (s?.structure && !s.structure.rest) {
+        s.structure = structureFromClassic(s.structure);
+      }
+      return s;
+    });
     next.athleteProfile = deriveProfile(logs, next, settings);
-    // Si el plan v3 quedó sin pendientes, generar horizonte (corrige PLAN AL DÍA)
-    return ensureHorizon(next, logs, settings, { action: 'consolidate', reason: 'Migración v4: continuidad del plan.' });
+    return ensureHorizon(next, logs, settings, already
+      ? null
+      : { action: 'consolidate', reason: 'Migración adaptativa: continuidad del plan.' });
   }
 
   function buildDiffMessage(prevStructure, nextStructure, decision) {
     const diff = compareStructures(prevStructure, nextStructure);
+    const action = decision?.action || 'consolidate';
     return {
-      action: decision?.action || 'consolidate',
-      actionLabel: ({
-        progress: 'Progresar',
-        consolidate: 'Consolidar',
-        repeat: 'Repetir',
-        reduce: 'Reducir carga',
-        recovery: 'Recuperación',
-        reassess: 'Reevaluar'
-      })[decision?.action] || 'Consolidar',
+      action,
+      actionLabel: ACTION_LABELS[action] || ACTION_LABELS.consolidate,
       previous: describeStructure(prevStructure),
       next: describeStructure(nextStructure),
+      previousRunAccum: diff.previousMetrics ? formatBlockSec(diff.previousMetrics.totalRunSec) : null,
+      nextRunAccum: diff.nextMetrics ? formatBlockSec(diff.nextMetrics.totalRunSec) : null,
       lines: diff.lines,
       summary: diff.summary,
+      interpretation: diff.interpretation,
+      dimension: diff.dimension,
       reason: decision?.reason || '',
-      sameLoad: diff.sameLoad
+      sameLoad: diff.sameLoad,
+      priorityDimension: decision?.priorityDimension || diff.dimension,
+      caution: decision?.caution || null,
+      speedSuggestion: null
+    };
+  }
+
+  function validateStructureMath(st) {
+    const m = metrics(st);
+    const sum = m.warmSeconds + m.coolSeconds + m.totalRunSec + m.totalWalkSec;
+    return {
+      ok: sum === m.totalSec,
+      sum,
+      totalSec: m.totalSec,
+      metrics: m
     };
   }
 
   window.PaceAdaptive = {
     ENGINE_VERSION,
     DEFAULT_PARAMS,
+    ACTION_LABELS,
     setClock,
     now,
     localDateISO,
+    addDaysISO,
     paramsOf,
     structureFromClassic,
     metrics,
@@ -800,19 +1293,25 @@
     describeStructure,
     compareStructures,
     deriveProfile,
+    assessCaution,
     trendFavorable,
     decideAdaptive,
     generateCandidates,
     pickCandidate,
     withinLoadLimits,
     ensureHorizon,
+    allocateScheduleDates,
     migratePlanToV4,
     buildDiffMessage,
+    suggestSpeed,
     makeRunItem,
     makeRestItem,
     structureForProfile,
     validTrainingLogs,
     pendingRuns,
-    openItems
+    openItems,
+    validateStructureMath,
+    priorityDimensionFor,
+    formatBlockSec
   };
 })();

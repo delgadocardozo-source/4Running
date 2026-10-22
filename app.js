@@ -43,6 +43,8 @@
   let transitionLock = false;
   let speakGeneration = 0;
   let lastSaveResult = null;
+  /** Tiempo del cronómetro al abrir el cierre (para no comparar contra un elapsed vivo). */
+  let closeMeasuredTime = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -59,12 +61,31 @@
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
   }
 
-  function localDateISO(date = new Date()) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
+  function localDateISO(date) {
+    if (window.PaceAdaptive) {
+      return window.PaceAdaptive.localDateISO(date || window.PaceAdaptive.now());
+    }
+    const dt = date || new Date();
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
+
+  /** Reloj de pruebas aislado (no altera producción salvo que se invoque). */
+  window.PaceTestClock = {
+    setISO(iso) {
+      if (!window.PaceAdaptive) return;
+      const [y, m, d] = String(iso).split('-').map(Number);
+      window.PaceAdaptive.setClock(() => new Date(y, m - 1, d, 10, 0, 0));
+    },
+    clear() {
+      if (window.PaceAdaptive) window.PaceAdaptive.setClock(() => new Date());
+    },
+    today() {
+      return localDateISO();
+    }
+  };
 
   function speedForType(type) {
     if (type === 'run') return settings.runSpeed;
@@ -657,7 +678,8 @@
     prepareCloseForm({ fromTimer: true });
     const run = activeRunSession();
     $('#sessionPlanId').value = activePlanSessionId || run?.id || '';
-    $('#sessionTime').value = formatTime(elapsedMs / 1000);
+    closeMeasuredTime = formatTime(elapsedMs / 1000);
+    $('#sessionTime').value = closeMeasuredTime;
     $('#sessionDistance').value = distance ? distance.toFixed(2) : '';
     $('#sessionDistanceEstimated').checked = true;
     syncDistanceEstimateUi();
@@ -1020,8 +1042,10 @@
     if (entry?.voluntary || entry?.type === 'Recuperación' || entry?.source === 'rest') {
       return {
         cls: 'recovery',
-        title: 'El plan quedó en pausa',
-        summary: 'Sesión de recuperación registrada. Esta sesión no avanzó ni completó el entrenamiento pendiente.',
+        title: 'Recuperación completada',
+        summary: entry?.voluntary
+          ? 'Recuperación registrada. Tu sesión de entrenamiento sigue pendiente; no se completó ni se duplicó.'
+          : 'Recuperación completada. Tu próximo entrenamiento quedó habilitado.',
         chips: ['Recuperación']
       };
     }
@@ -1029,7 +1053,7 @@
       return {
         cls: 'recovery',
         title: 'Recuperación',
-        summary: 'Priorizamos recuperar antes de subir la carga. El plan principal no avanzó.',
+        summary: 'Priorizamos recuperar antes de subir la carga. La misma sesión de carrera sigue pendiente hasta completar la recuperación.',
         chips: codes.includes('SAFETY_OVERRIDE') ? ['Señal de alerta'] : ['Molestia']
       };
     }
@@ -1041,11 +1065,35 @@
         chips: []
       };
     }
-    if (action === 'consolidate' || codes.includes('RPE_MID_CONSOLIDATE') || codes.includes('LOW_EVIDENCE')) {
+    if (action === 'progress_continuous') {
+      return {
+        cls: 'advance',
+        title: 'Progresión de continuo',
+        summary: 'Priorizamos bloques de carrera más largos. El volumen acumulado puede bajar un poco para equilibrar.',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Continuo'] : ['Continuo']
+      };
+    }
+    if (action === 'progress_volume') {
+      return {
+        cls: 'advance',
+        title: 'Progresión de volumen',
+        summary: 'Priorizamos más minutos de carrera acumulada manteniendo el bloque continuo.',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Volumen'] : ['Volumen']
+      };
+    }
+    if (action === 'progress_performance') {
+      return {
+        cls: 'advance',
+        title: 'Progresión de rendimiento',
+        summary: 'Con base suficiente, orientamos el estímulo a rendimiento (sin tocar tu velocidad sin tu OK).',
+        chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Rendimiento'] : ['Rendimiento']
+      };
+    }
+    if (action === 'consolidate' || codes.includes('RPE_MID_CONSOLIDATE') || codes.includes('LOW_EVIDENCE') || codes.includes('RPE_6_HOLD')) {
       return {
         cls: 'advance',
         title: 'Consolidar',
-        summary: 'Mantenemos la misma carga para consolidar tolerancia. No es un aumento.',
+        summary: 'Mantenemos tu entrenamiento actual para consolidar la adaptación. No es un aumento.',
         chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Consolidar'] : ['Consolidar']
       };
     }
@@ -1098,18 +1146,33 @@
 
   function trendUserCopy(trend) {
     const tone = trend?.tone || 'estable';
+    const profile = window.PaceAdaptive
+      ? window.PaceAdaptive.deriveProfile(logs, plan, settings)
+      : null;
+    const caution = profile?.caution || window.PaceAdaptive?.assessCaution?.(logs, plan);
+    const confidenceLine = profile
+      ? `Confianza ${profile.confidence}: ${profile.confidenceNote}`
+      : null;
+    const cautionLine = caution?.level && caution.level !== 'none'
+      ? `Precaución: ${(caution.reasons || []).join(' ')}`
+      : 'Sin precaución activa: no hay factores recientes que obliguen a bajar la carga.';
+
     if (tone === 'favorable') {
       return {
         tone,
         title: 'Buena progresión',
-        detail: 'Tus sesiones recientes muestran buena tolerancia al entrenamiento.'
+        detail: 'Tus sesiones recientes muestran buena tolerancia al entrenamiento.',
+        confidenceLine,
+        cautionLine
       };
     }
-    if (tone === 'precaucion') {
+    if (tone === 'precaucion' || (caution && caution.level !== 'none')) {
       return {
-        tone,
+        tone: 'precaucion',
         title: 'Precaución',
-        detail: 'Tus últimas sesiones muestran una carga mayor de la esperada.'
+        detail: (caution?.reasons && caution.reasons[0]) || 'Algún factor aconseja moderar la próxima carga.',
+        confidenceLine,
+        cautionLine
       };
     }
     const valid = Coach().validTrainingAttempts(logs, plan);
@@ -1117,13 +1180,17 @@
       return {
         tone: 'estable',
         title: 'Construyendo tendencia',
-        detail: 'Necesitamos más entrenamientos para evaluar tu evolución con mayor confianza.'
+        detail: 'Necesitamos más entrenamientos para evaluar tu evolución.',
+        confidenceLine,
+        cautionLine
       };
     }
     return {
       tone: 'estable',
       title: 'Estable',
-      detail: 'Tus sesiones recientes se mantienen en un rango similar.'
+      detail: 'Tus sesiones recientes se mantienen en un rango similar.',
+      confidenceLine,
+      cautionLine
     };
   }
 
@@ -1185,7 +1252,11 @@
       body,
       nextLine,
       previousLine,
+      previousRunAccum: expl?.previousRunAccum || null,
+      nextRunAccum: expl?.nextRunAccum || null,
       changeLines,
+      interpretation: expl?.interpretation || '',
+      speedSuggestion: result?.speedSuggestion || expl?.speedSuggestion || plan?.pendingSpeedSuggestion || null,
       cls: copy.cls,
       chips: copy.chips,
       action: decision.adaptiveAction || decision.action || result?.action
@@ -1311,9 +1382,10 @@
   }
 
   function togglePainDetails() {
-    const yes = $('#painYes').checked;
-    $('#painDetails').hidden = !yes;
-    $('#sessionPainLocation').required = yes;
+    const yes = $('#painYes')?.checked;
+    if ($('#painDetails')) $('#painDetails').hidden = !yes;
+    // No usar required nativo: campos en pasos ocultos bloquean el submit sin mensaje visible.
+    if ($('#sessionPainLocation')) $('#sessionPainLocation').required = false;
   }
 
   function sortedLogs() {
@@ -1335,12 +1407,15 @@
     $('#bestContinuous').textContent = bestCont ? Coach().formatBlock(bestCont) : '—';
 
     const trend = trendUserCopy(Coach().summarizeTrend(logs, plan));
+    const readiness = Coach().assessRaceReadiness(logs, plan);
     $('#historyTrend').innerHTML = `
       <div class="trend-block">
         <span class="metric-label">Tu tendencia</span>
         <strong class="metric-status ${trend.tone}">${escapeHtml(trend.title)}</strong>
         <p class="trend-detail">${escapeHtml(trend.detail)}</p>
-        <p class="trend-hint">La tendencia mira varias sesiones. Cada entrenamiento también tiene su propia decisión.</p>
+        <p class="trend-split"><strong>Confianza</strong> (${escapeHtml(readiness.confidenceLabel || readiness.confidence || '—')}): ${escapeHtml(trend.confidenceLine || 'Indica cuánta evidencia confiable hay para decidir.')}</p>
+        <p class="trend-split"><strong>Precaución</strong>: ${escapeHtml(trend.cautionLine || 'Indica si conviene moderar la próxima carga.')}</p>
+        <p class="trend-hint">Confianza y precaución no son opuestos: pueden coexistir.</p>
       </div>`;
 
     $('#historyList').innerHTML = sorted.map(s => {
@@ -1438,8 +1513,30 @@
     if (isRun && underlying?.status === 'rescheduled' && underlying.scheduledDate) {
       scheduleNote.hidden = false;
       scheduleNote.textContent = `Reprogramada para ${formatFriendlyDate(underlying.scheduledDate) || underlying.scheduledDate}. Es la misma sesión.`;
+    } else if (focus?.scheduledDate) {
+      scheduleNote.hidden = false;
+      scheduleNote.textContent = focus.kind === 'rest'
+        ? `Recuperación programada: ${formatFriendlyDate(focus.scheduledDate) || focus.scheduledDate}.`
+        : `Programada: ${formatFriendlyDate(focus.scheduledDate) || focus.scheduledDate}.`;
     } else {
       scheduleNote.hidden = true;
+    }
+
+    const confEl = $('#confidenceExplain');
+    const cautEl = $('#cautionExplain');
+    if (window.PaceAdaptive) {
+      const profile = window.PaceAdaptive.deriveProfile(logs, plan, settings);
+      if (confEl) {
+        confEl.hidden = false;
+        confEl.textContent = `Confianza ${profile.confidence}: ${profile.confidenceNote}`;
+      }
+      if (cautEl) {
+        const c = profile.caution;
+        cautEl.hidden = false;
+        cautEl.textContent = c?.level && c.level !== 'none'
+          ? `Precaución: ${(c.reasons || []).join(' ')}`
+          : 'Precaución: sin factores activos.';
+      }
     }
 
     if (isRest) {
@@ -1493,18 +1590,19 @@
           adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Repetir</strong><em>${escapeHtml(Number(ctx.attempt.rpe) >= 7 ? 'La anterior resultó muy exigente.' : copy.summary)}</em>`;
         } else if (ctx.attempt.progression === 'recovery' || act === 'recovery') {
           adaptNote.hidden = false;
-          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Recuperación</strong><em>La recuperación no avanzó el plan.</em>`;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Recuperación</strong><em>Completá la recuperación para habilitar la misma sesión de carrera.</em>`;
         } else if (act === 'consolidate') {
           adaptNote.hidden = false;
           adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Consolidar</strong><em>${escapeHtml(copy.summary)}</em>`;
         } else if (act === 'reduce') {
           adaptNote.hidden = false;
           adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>Reducir carga</strong><em>${escapeHtml(copy.summary)}</em>`;
-        } else if (ctx.attempt.progression === 'advance' || act === 'progress') {
+        } else if (ctx.attempt.progression === 'advance' || String(act || '').startsWith('progress')) {
           const expl = lastSaveResult?.explanation;
-          const change = expl?.summary || copy.summary;
+          const change = expl?.interpretation || expl?.summary || copy.summary;
+          const label = copy.title || (String(act).includes('continuous') ? 'Progresión de continuo' : 'Progresar');
           adaptNote.hidden = false;
-          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>${escapeHtml(act === 'progress' ? 'Progresar' : copy.title || 'Progresar')}</strong><em>${escapeHtml(change)}</em>`;
+          adaptNote.innerHTML = `<span>Próximo entrenamiento</span><strong>${escapeHtml(label)}</strong><em>${escapeHtml(change)}</em>`;
         } else {
           adaptNote.hidden = true;
           adaptNote.innerHTML = '';
@@ -1544,124 +1642,141 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  function saveSessionFromForm(e) {
-    e.preventDefault();
-    const rpe = selectedValue('sessionRpe');
-    const painVal = selectedValue('sessionPain');
-    if (!rpe || !painVal) {
-      showToast('Completá RPE y molestia/dolor');
-      showCloseStep(1);
-      return;
-    }
-    const pain = painVal === 'yes';
-    if (pain && !$('#sessionPainLocation').value.trim()) {
-      showToast('Indicá la ubicación de la molestia');
-      return;
-    }
-    const done = selectedValue('prescriptionDone');
-    if (!done) {
-      showToast('Indicá si terminaste la sesión');
-      showCloseStep(1);
-      return;
-    }
-    if (!$('#sessionDate').value || !$('#sessionTime').value.trim()) {
-      showToast('Completá fecha y tiempo');
-      showCloseStep(3);
-      return;
-    }
+  function timeToSec(t) {
+    const p = String(t || '').split(':').map(Number);
+    if (p.some(n => !Number.isFinite(n))) return 0;
+    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+    if (p.length === 2) return p[0] * 60 + p[1];
+    return Number(t) || 0;
+  }
 
-    const external = $('#sessionExternal').value === '1';
-    const fromTimer = $('#sessionFromTimer').value === '1';
-    if (fromTimer && !$('#sessionTimeConfirmed')?.checked) {
-      const measured = formatTime(elapsedMs / 1000);
-      const manual = $('#sessionTime').value.trim();
-      if (manual && measured && manual !== measured) {
-        const toSec = (t) => {
-          const p = String(t).split(':').map(Number);
-          if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
-          if (p.length === 2) return p[0] * 60 + p[1];
-          return Number(t) || 0;
-        };
-        const delta = Math.abs(toSec(manual) - toSec(measured));
-        if (delta >= 60) {
-          const ok = window.confirm(`El tiempo manual (${manual}) difiere del cronómetro (${measured}) en ${Math.round(delta)} s. ¿Confirmás la corrección?`);
-          if (!ok) {
-            showCloseStep(3);
-            return;
+  async function saveSessionFromForm(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    try {
+      const rpe = selectedValue('sessionRpe');
+      const painVal = selectedValue('sessionPain');
+      if (!rpe || !painVal) {
+        showToast('Completá RPE y molestia/dolor');
+        showCloseStep(1);
+        return;
+      }
+      const pain = painVal === 'yes';
+      if (pain && !$('#sessionPainLocation').value.trim()) {
+        showToast('Indicá la ubicación de la molestia');
+        showCloseStep(2);
+        return;
+      }
+      const done = selectedValue('prescriptionDone');
+      if (!done) {
+        showToast('Indicá si terminaste la sesión');
+        showCloseStep(1);
+        return;
+      }
+      if (!$('#sessionDate').value || !$('#sessionTime').value.trim()) {
+        showToast('Completá fecha y tiempo');
+        showCloseStep(3);
+        return;
+      }
+
+      const external = $('#sessionExternal').value === '1';
+      const fromTimer = $('#sessionFromTimer').value === '1';
+      if (fromTimer) {
+        const measured = closeMeasuredTime || formatTime(elapsedMs / 1000);
+        const manual = $('#sessionTime').value.trim();
+        if (manual && measured && manual !== measured) {
+          const delta = Math.abs(timeToSec(manual) - timeToSec(measured));
+          if (delta >= 60) {
+            const ok = await askConfirm({
+              title: '¿Confirmás el tiempo?',
+              body: `El tiempo indicado (${manual}) difiere del cronómetro (${measured}) en unos ${Math.round(delta)} s.`,
+              ok: 'Guardar con ese tiempo',
+              cancel: 'Revisar'
+            });
+            if (!ok) {
+              showCloseStep(3);
+              return;
+            }
           }
         }
       }
-    }
-    const date = $('#sessionDate').value || localDateISO();
-    const id = `${date}-${Date.now()}`;
-    const prescriptionCompleted = done === 'yes';
-    const typeValue = $('#sessionType').value;
-    const environment = typeValue === 'Cinta' ? 'treadmill'
-      : typeValue === 'Exterior' ? 'outdoor'
-      : (sessionEnvironment || settings.lastEnvironment || null);
-    const log = {
-      id,
-      date,
-      type: typeValue,
-      environment,
-      planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
-      time: $('#sessionTime').value.trim() || null,
-      distanceKm: parseOptionalNumber($('#sessionDistance').value),
-      distanceEstimated: $('#sessionDistanceEstimated').checked,
-      maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
-      couldContinue: selectedValue('couldContinue'),
-      rpe: Number(rpe),
-      pain,
-      painLocation: pain ? $('#sessionPainLocation').value.trim() : '',
-      painIntensity: pain ? parseOptionalNumber($('#sessionPainIntensity').value) : null,
-      worseningDuringRun: pain && $('#flagWorsening').checked,
-      alteredGait: pain && $('#flagAlteredGait').checked,
-      forcedStop: pain && $('#flagForcedStop').checked,
-      severeWarning: pain && $('#flagSevere').checked,
-      prescriptionCompleted,
-      extraSeconds: parseOptionalNumber($('#sessionExtraSec').value) || 0,
-      execution: prescriptionCompleted ? 'completed' : 'aborted',
-      progression: null,
-      notes: $('#sessionNotes').value.trim(),
-      source: external ? 'external' : (fromTimer ? 'timer' : 'manual')
-    };
 
-    logs.push(log);
-    let result = null;
+      const date = $('#sessionDate').value || localDateISO();
+      const id = `${date}-${Date.now()}`;
+      const prescriptionCompleted = done === 'yes';
+      const typeValue = $('#sessionType').value;
+      const environment = typeValue === 'Cinta' ? 'treadmill'
+        : typeValue === 'Exterior' ? 'outdoor'
+        : (sessionEnvironment || settings.lastEnvironment || null);
+      const log = {
+        id,
+        date,
+        type: typeValue,
+        environment,
+        planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
+        time: $('#sessionTime').value.trim() || null,
+        distanceKm: parseOptionalNumber($('#sessionDistance').value),
+        distanceEstimated: $('#sessionDistanceEstimated').checked,
+        maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
+        couldContinue: selectedValue('couldContinue'),
+        rpe: Number(rpe),
+        pain,
+        painLocation: pain ? $('#sessionPainLocation').value.trim() : '',
+        painIntensity: pain ? parseOptionalNumber($('#sessionPainIntensity').value) : null,
+        worseningDuringRun: pain && $('#flagWorsening').checked,
+        alteredGait: pain && $('#flagAlteredGait').checked,
+        forcedStop: pain && $('#flagForcedStop').checked,
+        severeWarning: pain && $('#flagSevere').checked,
+        prescriptionCompleted,
+        extraSeconds: parseOptionalNumber($('#sessionExtraSec').value) || 0,
+        execution: prescriptionCompleted ? 'completed' : 'aborted',
+        progression: null,
+        notes: $('#sessionNotes').value.trim(),
+        source: external ? 'external' : (fromTimer ? 'timer' : 'manual')
+      };
 
-    if (log.planSessionId && !external) {
-      result = Coach().confirmNextSession(plan, log, logs);
-      plan = result.plan;
-      lastSaveResult = result;
-      Coach().savePlan(plan);
-      Coach().saveLogs(logs);
-      if (result.medicalNotice || result.decision?.medicalNotice) {
-        setTimeout(() => {
-          showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
-        }, 3400);
+      logs.push(log);
+      let result = null;
+
+      if (log.planSessionId && !external) {
+        result = Coach().confirmNextSession(plan, log, logs);
+        plan = result.plan;
+        lastSaveResult = result;
+        Coach().savePlan(plan);
+        Coach().saveLogs(logs);
+        if (result.medicalNotice || result.decision?.medicalNotice) {
+          setTimeout(() => {
+            showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
+          }, 3400);
+        }
+      } else {
+        Coach().saveLogs(logs);
+        lastSaveResult = null;
+        audit('log-unlinked', { source: log.source, id: log.id });
       }
-    } else {
-      Coach().saveLogs(logs);
-      lastSaveResult = null;
-      audit('log-unlinked', { source: log.source, id: log.id });
-    }
 
-    if (environment) {
-      settings.lastEnvironment = environment;
-      persistSettings();
-    }
+      if (environment) {
+        settings.lastEnvironment = environment;
+        persistSettings();
+      }
 
-    $('#sessionDialog').close();
-    $('#sessionForm').reset();
-    $('#sessionFromTimer').value = '0';
-    togglePainDetails();
-    reloadWorkoutFromPlan();
-    renderHistory();
-    renderHome();
-    if (result && !external) showAdaptationResult(result, log);
-    else {
-      showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
-      navTo('home');
+      closeMeasuredTime = null;
+      if ($('#sessionDialog')?.open) $('#sessionDialog').close();
+      $('#sessionForm').reset();
+      $('#sessionFromTimer').value = '0';
+      $('#sessionPainLocation').required = false;
+      togglePainDetails();
+      reloadWorkoutFromPlan();
+      renderHistory();
+      renderHome();
+      if (result && !external) showAdaptationResult(result, log);
+      else {
+        showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
+        navTo('home');
+      }
+    } catch (err) {
+      console.error('[pace01] save-session', err);
+      showToast('No se pudo guardar. Probá de nuevo; si persiste, exportá tu historial.');
+      showCloseStep(3);
     }
   }
 
@@ -1686,21 +1801,55 @@
       ? `<ul class="adapt-changes">${adapt.changeLines.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
       : '';
     const prevHtml = adapt.previousLine
-      ? `<p class="adapt-prev"><span>Anterior</span> ${escapeHtml(adapt.previousLine)}</p>`
+      ? `<p class="adapt-prev"><span>Anterior</span> ${escapeHtml(adapt.previousLine)}${adapt.previousRunAccum ? ` · carrera acumulada ${escapeHtml(adapt.previousRunAccum)}` : ''}</p>`
       : '';
-    action.innerHTML = `<strong>${escapeHtml(adapt.headline)}</strong><p>${escapeHtml(adapt.body)}</p>${prevHtml}${changeHtml}`;
+    const nextAccum = adapt.nextRunAccum
+      ? `<p class="adapt-prev"><span>Nuevo</span> ${escapeHtml(adapt.nextLine)} · carrera acumulada ${escapeHtml(adapt.nextRunAccum)}</p>`
+      : '';
+    const interpHtml = adapt.interpretation
+      ? `<p class="adapt-interp">${escapeHtml(adapt.interpretation)}</p>`
+      : '';
+    const speed = adapt.speedSuggestion;
+    const speedHtml = speed
+      ? `<div class="adapt-speed" id="adaptSpeedBox" data-speed-action="${escapeHtml(speed.action || 'keep')}">
+          <p>${escapeHtml(speed.message || '')}</p>
+          ${speed.action === 'suggest_up' && speed.suggestedKmh != null
+            ? `<div class="adapt-speed-actions">
+                <button type="button" class="quiet-button" id="rejectSpeedBtn">Mantener ${escapeHtml(String(speed.currentKmh).replace('.', ','))}</button>
+                <button type="button" class="primary-button accent-button" id="acceptSpeedBtn">Probar ${escapeHtml(String(speed.suggestedKmh).replace('.', ','))} km/h</button>
+              </div>`
+            : ''}
+        </div>`
+      : '';
+    action.innerHTML = `<strong>${escapeHtml(adapt.headline)}</strong><p>${escapeHtml(adapt.body)}</p>${prevHtml}${nextAccum}${changeHtml}${interpHtml}${speedHtml}`;
     $('#adaptNext').textContent = adapt.nextLine;
     const act = adapt.action || result.action;
-    $('#adaptHint').textContent = act === 'progress'
-      ? 'Progresamos una variable con límite conservador. Observá cómo responde el cuerpo.'
+    $('#adaptHint').textContent = String(act || '').startsWith('progress')
+      ? 'Progresamos una dimensión con límite conservador. Observá cómo responde el cuerpo.'
       : act === 'consolidate'
-        ? 'Consolidamos: misma carga o equivalente. No es un aumento.'
+        ? 'Mantenemos tu entrenamiento actual para consolidar la adaptación.'
         : act === 'reduce'
           ? 'Redujimos carga. El historial se conserva.'
           : result.progression === 'repeat'
             ? 'Repetimos este estímulo antes de aumentar.'
             : 'Cuando estés listo, volvés a la misma sesión del plan.';
     if (!dialog.open) dialog.showModal();
+    $('#acceptSpeedBtn')?.addEventListener('click', () => {
+      const out = Coach().acceptSpeedSuggestion(plan, settings);
+      plan = out.plan;
+      settings = out.settings;
+      Coach().savePlan(plan);
+      persistSettings();
+      showToast(out.message);
+      $('#adaptSpeedBox')?.remove();
+    }, { once: true });
+    $('#rejectSpeedBtn')?.addEventListener('click', () => {
+      const out = Coach().rejectSpeedSuggestion(plan);
+      plan = out.plan;
+      Coach().savePlan(plan);
+      showToast(out.message);
+      $('#adaptSpeedBox')?.remove();
+    }, { once: true });
   }
 
   function reloadWorkoutFromPlan() {
@@ -1996,7 +2145,7 @@
       const toLabel = formatFriendlyDate(result.scheduledDate || date);
       await askConfirm({
         title: 'Entrenamiento reprogramado',
-        body: `${fromLabel} → ${toLabel}\nEs la misma sesión. Tu progreso no avanzó.`,
+        body: `${fromLabel} → ${toLabel}\nEs la misma sesión: solo cambia la fecha, no la dificultad.`,
         ok: 'Entendido',
         cancel: null
       });
@@ -2104,7 +2253,14 @@
     $('#editSpeeds').addEventListener('click', openSpeedDialog);
     $('#speedForm').addEventListener('submit', saveSessionSpeeds);
     $('#addSession').addEventListener('click', openManualLog);
-    $('#sessionForm').addEventListener('submit', saveSessionFromForm);
+    $('#sessionForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveSessionFromForm(e);
+    });
+    $('#saveSession').addEventListener('click', (e) => {
+      e.preventDefault();
+      saveSessionFromForm(e);
+    });
     $('#settingsForm').addEventListener('submit', saveSettings);
     $('#exportHistory').addEventListener('click', exportSessions);
     $('#painYes').addEventListener('change', togglePainDetails);

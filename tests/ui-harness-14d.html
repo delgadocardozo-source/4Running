@@ -1,0 +1,69 @@
+<!doctype html><html><body>
+<script src="/adaptive-engine.js"></script>
+<script src="/coach-engine.js"></script>
+<script>
+window.__rows = [];
+(async function(){
+  const A = PaceAdaptive, C = PaceCoach;
+  localStorage.clear();
+  // seed minimal settings
+  localStorage.setItem('pace01.settings.v1', JSON.stringify({walkSpeed:5,runSpeed:7.5,coolSpeed:4.5,countdown:true,voice:false,sound:false}));
+  let plan = C.loadPlan();
+  let logs = C.loadLogs();
+  function setDay(iso){
+    const [y,m,d]=iso.split('-').map(Number);
+    A.setClock(()=>new Date(y,m-1,d,10,0,0));
+  }
+  function add(iso,n){ return A.addDaysISO(iso,n); }
+  let cursor='2026-07-01';
+  for(let i=0;i<7;i++){
+    setDay(cursor);
+    let focus=C.getFocusSession(plan);
+    while(focus && focus.kind==='rest'){
+      const out=C.markRestComplete(plan,logs,focus.id,cursor);
+      plan=out.plan; logs=out.logs; C.savePlan(plan); C.saveLogs(logs);
+      cursor=add(cursor,1); setDay(cursor);
+      focus=C.getFocusSession(plan);
+    }
+    focus=C.getFocusSession(plan);
+    if(!focus||focus.kind!=='run'){ plan=A.ensureHorizon(plan,logs,{runSpeed:7.5,walkSpeed:5,coolSpeed:4.5}); focus=C.getFocusSession(plan); }
+    while(focus&&focus.kind==='rest'){
+      const out=C.markRestComplete(plan,logs,focus.id,cursor);
+      plan=out.plan; logs=out.logs; cursor=add(cursor,1); setDay(cursor); focus=C.getFocusSession(plan);
+    }
+    const st=A.structureFromClassic(focus.structure);
+    const rpe = i%2?4:3;
+    const log={
+      id:cursor+'-'+i, date:cursor, type:'Cinta', planSessionId:focus.id, time:'38:00',
+      distanceKm:3.1, distanceEstimated:true, maxRunBlockSec:st.runSeconds, rpe, pain:false,
+      worseningDuringRun:false,alteredGait:false,forcedStop:false,severeWarning:false,
+      prescriptionCompleted:true, execution:'completed', environment:'treadmill', source:'timer'
+    };
+    logs.push(log);
+    const result=C.confirmNextSession(plan,log,logs);
+    plan=result.plan; C.savePlan(plan); C.saveLogs(logs);
+    const next=C.sortedPlanSessions(plan).find(s=>s.kind==='run'&&(s.status==='pending'||s.status==='rescheduled'));
+    window.__rows.push({
+      date:cursor,
+      prescribed:A.describeStructure(st),
+      continuous:st.runSeconds,
+      totalRun:A.metrics(st).totalRunSec,
+      walk:A.metrics(st).totalWalkSec,
+      reps:st.reps,
+      totalMin:A.metrics(st).totalMin,
+      speeds:{run:7.5,walk:5,cool:4.5},
+      rpe,
+      completed:true,
+      action:result.action,
+      next:next?A.describeStructure(next.structure):null,
+      diff:result.explanation&&result.explanation.summary,
+      interpretation:result.explanation&&result.explanation.interpretation,
+      reason:result.decision&&result.decision.reason,
+      scheduled:next&&next.scheduledDate
+    });
+    cursor=add(cursor,2);
+  }
+  document.title='DONE:'+window.__rows.length;
+  document.body.textContent=JSON.stringify(window.__rows);
+})();
+</script></body></html>

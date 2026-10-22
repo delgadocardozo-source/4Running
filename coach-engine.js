@@ -668,7 +668,8 @@
         reasonCode: d.reasonCode || [],
         profile: d.profile,
         trend: d.trend,
-        caution: d.action === 'progress' && Number(log.rpe) === 6
+        caution: d.caution || null,
+        priorityDimension: d.priorityDimension || null
       };
     }
 
@@ -882,6 +883,10 @@
     const prescriptionCompleted = log.prescriptionCompleted !== false && execution !== 'aborted';
 
     const adaptiveAction = decision.adaptiveAction || decision.action || decision.progression;
+    const speedSuggestion = window.PaceAdaptive
+      ? window.PaceAdaptive.suggestSpeed([...(priorLogs || []), log], loadSettingsSoft(), plan)
+      : null;
+    if (speedSuggestion) plan.pendingSpeedSuggestion = speedSuggestion;
     const attempt = {
       id: `att-${Date.now()}`,
       logId: log.id,
@@ -891,6 +896,8 @@
       progression: decision.progression,
       adaptiveAction,
       action: adaptiveAction,
+      priorityDimension: decision.priorityDimension || null,
+      caution: decision.caution || null,
       rpe: log.rpe,
       pain: Boolean(log.pain),
       painIntensity: log.painIntensity,
@@ -963,8 +970,10 @@
         : sortedPlanSessions(plan).find(s => isOpenStatus(s.status) && s.kind === 'run');
       if (nextRun?.structure) {
         explanation = window.PaceAdaptive.buildDiffMessage(prevStructure, nextRun.structure, decision);
+        explanation.speedSuggestion = speedSuggestion;
         nextRun.changeSummary = explanation;
         nextRun.justification = decision.reason;
+        nextRun.primaryDimension = decision.priorityDimension || explanation.dimension;
       }
     }
     if (next) {
@@ -986,7 +995,9 @@
       decision,
       attempt,
       explanation,
-      previousStructure: prevStructure
+      previousStructure: prevStructure,
+      speedSuggestion,
+      caution: decision.caution || null
     };
   }
 
@@ -1043,14 +1054,18 @@
         });
       }
       const next = getFocusSession(plan);
+      const nextMsg = next?.scheduledDate
+        ? `Recuperación completada. Tu próximo entrenamiento quedó habilitado para ${next.scheduledDate}.`
+        : next
+          ? 'Recuperación completada. Tu próximo entrenamiento quedó habilitado.'
+          : 'Recuperación registrada.';
       return {
         plan,
         logs,
         log,
-        message: next
-          ? `Recuperación registrada. Volvés a: ${next.title}.`
-          : 'Recuperación registrada.',
-        next
+        message: nextMsg,
+        next,
+        recoveryEnabledNext: Boolean(next)
       };
     }
 
@@ -1059,6 +1074,7 @@
     log.planSessionId = focus.id;
     focus.status = 'completed';
     focus.completedLogId = log.id;
+    focus.completedDate = log.date || localDate;
     if (!Array.isArray(focus.attempts)) focus.attempts = [];
     focus.attempts.push({
       id: `att-${Date.now()}`,
@@ -1066,6 +1082,7 @@
       date: log.date,
       execution: 'completed',
       progression: 'advance',
+      adaptiveAction: 'recovery_complete',
       rpe: null,
       pain: false
     });
@@ -1077,14 +1094,18 @@
       });
     }
     const next = getFocusSession(plan);
+    const nextMsg = next?.scheduledDate
+      ? `Recuperación completada. Tu próximo entrenamiento quedó habilitado para ${next.scheduledDate}.`
+      : next
+        ? 'Recuperación completada. Tu próximo entrenamiento quedó habilitado.'
+        : 'Recuperación registrada.';
     return {
       plan,
       logs,
       log,
-      message: next
-        ? `Recuperación registrada. Siguiente: ${next.title}.`
-        : 'Recuperación registrada.',
-      next
+      message: nextMsg,
+      next,
+      recoveryEnabledNext: Boolean(next)
     };
   }
 
@@ -1134,7 +1155,7 @@
       previousDate,
       scheduledDate,
       title: focus.title,
-      message: `Misma sesión reprogramada al ${scheduledDate}. El plan no avanzó.`,
+      message: `Misma sesión reprogramada al ${scheduledDate}. La dificultad no cambió; solo la fecha.`,
       next: focus
     };
   }
@@ -1244,7 +1265,7 @@
         plan,
         logs,
         log,
-        message: 'Día de recuperación registrado. Es la misma sesión: tu progreso no avanzó.'
+        message: 'Recuperación registrada. Tu sesión de entrenamiento sigue pendiente; no se completó ni se duplicó.'
       };
     } catch (error) {
       console.error('[pace01] voluntary-recovery', error);
@@ -1286,6 +1307,32 @@
     decideProgression,
     decideSafety,
     buildDayCoaching,
+    acceptSpeedSuggestion(plan, settings) {
+      const sug = plan?.pendingSpeedSuggestion;
+      if (!sug || sug.suggestedKmh == null) {
+        return { plan, settings, applied: false, message: 'No hay sugerencia de velocidad pendiente.' };
+      }
+      settings.runSpeed = sug.suggestedKmh;
+      plan.pendingSpeedSuggestion = {
+        ...sug,
+        action: 'accepted',
+        acceptedAt: window.PaceAdaptive ? window.PaceAdaptive.localDateISO() : null
+      };
+      return {
+        plan,
+        settings,
+        applied: true,
+        message: `Velocidad actualizada a ${String(sug.suggestedKmh).replace('.', ',')} km/h (aceptada por vos).`
+      };
+    },
+    rejectSpeedSuggestion(plan) {
+      if (!plan) return { plan, rejected: false };
+      const sug = plan.pendingSpeedSuggestion;
+      plan.pendingSpeedSuggestion = sug
+        ? { ...sug, action: 'rejected', rejectedAt: window.PaceAdaptive ? window.PaceAdaptive.localDateISO() : null }
+        : null;
+      return { plan, rejected: true, message: 'Mantenemos tu velocidad configurada.' };
+    },
     confirmNextSession,
     markRestComplete,
     registerVoluntaryRecovery,
