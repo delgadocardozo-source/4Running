@@ -1653,8 +1653,21 @@
     return Number(t) || 0;
   }
 
+  let saveInFlight = false;
+
   async function saveSessionFromForm(e) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (saveInFlight) return;
+
+    const saveBtn = $('#saveSession');
+    const setSavingUi = (busy) => {
+      saveInFlight = busy;
+      if (!saveBtn) return;
+      saveBtn.disabled = busy;
+      saveBtn.textContent = busy ? 'Guardando…' : 'Guardar entrenamiento';
+    };
+
     try {
       const rpe = selectedValue('sessionRpe');
       const painVal = selectedValue('sessionPain');
@@ -1680,6 +1693,8 @@
         showCloseStep(3);
         return;
       }
+
+      setSavingUi(true);
 
       const external = $('#sessionExternal').value === '1';
       const fromTimer = $('#sessionFromTimer').value === '1';
@@ -1746,6 +1761,7 @@
         lastSaveResult = result;
         Coach().savePlan(plan);
         Coach().saveLogs(logs);
+        audit('session-saved', { id: log.id, planSessionId: log.planSessionId, source: log.source });
         if (result.medicalNotice || result.decision?.medicalNotice) {
           setTimeout(() => {
             showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
@@ -1771,15 +1787,25 @@
       reloadWorkoutFromPlan();
       renderHistory();
       renderHome();
-      if (result && !external) showAdaptationResult(result, log);
-      else {
-        showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Registro guardado');
+
+      // UI post-guardado: si falla, el dato YA está en localStorage; no digas «no se pudo guardar».
+      try {
+        if (result && !external) showAdaptationResult(result, log);
+        else {
+          showToast(external ? 'Actividad externa guardada. El plan no se movió.' : 'Entrenamiento guardado');
+          navTo('home');
+        }
+      } catch (uiErr) {
+        console.error('[pace01] save-session-ui', uiErr);
+        showToast('Entrenamiento guardado');
         navTo('home');
       }
     } catch (err) {
       console.error('[pace01] save-session', err);
       showToast('No se pudo guardar. Probá de nuevo; si persiste, exportá tu historial.');
       showCloseStep(3);
+    } finally {
+      setSavingUi(false);
     }
   }
 
@@ -2334,10 +2360,12 @@
     $('#finishAndSave')?.addEventListener('click', finishAndSaveNow);
     $('#sessionForm').addEventListener('submit', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       saveSessionFromForm(e);
     });
     $('#saveSession').addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       saveSessionFromForm(e);
     });
     $('#settingsForm').addEventListener('submit', saveSettings);
