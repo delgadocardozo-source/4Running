@@ -1867,6 +1867,52 @@
     $('#sessionDialog').showModal();
   }
 
+  /** Registrar una sesión del plan ya hecha (sin cronómetro). Sirve para recuperar cierres fallidos. */
+  function openPlanSessionLog() {
+    const run = activeRunSession();
+    if (!run) {
+      showToast('No hay una sesión de plan pendiente para registrar.');
+      return;
+    }
+    prepareCloseForm({ external: false, fromTimer: false });
+    closeMeasuredTime = null;
+    activePlanSessionId = run.id;
+    $('#sessionPlanId').value = run.id;
+    $('#sessionDate').value = localDateISO();
+    $('#sessionTime').value = '';
+    $('#sessionDistance').value = '';
+    $('#sessionDistanceEstimated').checked = true;
+    syncDistanceEstimateUi();
+    const st = run.structure;
+    const cont = st?.runSeconds || '';
+    $('#sessionMaxRunBlockSec').value = cont ? String(cont) : '';
+    $('#sessionMaxRunBlockLabel').textContent = cont
+      ? `${Coach().formatBlock(cont)} (prescrito; corregí si corriste más/menos)`
+      : 'Indicá el mayor tramo continuo que corriste.';
+    if ($('#finishHero')) $('#finishHero').hidden = true;
+    $('#closeContext').hidden = false;
+    $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá tiempo, RPE y si terminaste la prescripción.';
+    showCloseStep(1);
+    if (!$('#sessionDialog').open) $('#sessionDialog').showModal();
+  }
+
+  function finishAndSaveNow() {
+    if (!activeRunSession()) {
+      showToast('No hay entrenamiento activo del plan.');
+      return;
+    }
+    if (!hasStarted && !finishedAnnounced) {
+      openPlanSessionLog();
+      return;
+    }
+    noteRunProgressOnLeave();
+    elapsedMs = getLiveElapsedMs();
+    pauseTimer();
+    finishedAnnounced = true;
+    remainingMs = 0;
+    openCloseDialogFromTimer();
+  }
+
   function renderSettings() {
     $('#walkSpeed').value = settings.walkSpeed;
     $('#runSpeed').value = settings.runSpeed;
@@ -2253,6 +2299,8 @@
     $('#editSpeeds').addEventListener('click', openSpeedDialog);
     $('#speedForm').addEventListener('submit', saveSessionSpeeds);
     $('#addSession').addEventListener('click', openManualLog);
+    $('#logPlanSession')?.addEventListener('click', openPlanSessionLog);
+    $('#finishAndSave')?.addEventListener('click', finishAndSaveNow);
     $('#sessionForm').addEventListener('submit', (e) => {
       e.preventDefault();
       saveSessionFromForm(e);
