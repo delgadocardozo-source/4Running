@@ -343,6 +343,48 @@ const reportPath = path.join(root, 'tests/simulation-14d-report.json');
 fs.writeFileSync(reportPath, JSON.stringify({ A: Ares.rows, B: Bres.rows, C: Cres.rows, D: Dres.rows, F: Fres.rows }, null, 2));
 console.log('\nReporte escrito en', reportPath);
 
+console.log('\n=== Ritmo de ciclo (sin warm/cool) ===');
+{
+  const st = { warmSeconds: 300, coolSeconds: 300, runSeconds: 120, walkSeconds: 120, reps: 7 };
+  // 5+5 warm/cool + 28 min ciclo = 38 min; distancia coherente con 5/7.5/4.5
+  const elapsed = 38 * 60;
+  const expectedKm = A.estimateKm(st, { walkSpeed: 5, runSpeed: 7.5, coolSpeed: 4.5 });
+  const pace = A.computeSessionPaceMetrics({
+    elapsedSec: elapsed,
+    distanceKm: expectedKm,
+    structure: st,
+    speeds: { walkSpeed: 5, runSpeed: 7.5, coolSpeed: 4.5 }
+  });
+  assert(pace && pace.hasStructure, 'calcula métricas con estructura');
+  assert(pace.cycleSec === 28 * 60, `ciclo = 28 min (sin warm/cool), got ${pace.cycleSec}`);
+  assert(pace.warmSec === 300 && pace.coolSec === 300, 'warm/cool fijos 5 min');
+  assert(pace.distanceSource === 'attributed', 'distancia atribuida por pesos');
+  // Ritmo de carrera ≈ 7.5 km/h → 480 s/km = 8:00/km
+  assert(pace.runPaceLabel === '8:00/km', `ritmo carrera 8:00/km, got ${pace.runPaceLabel}`);
+  assert(Math.abs(pace.runSpeedKmh - 7.5) < 0.05, `vel carrera ~7.5, got ${pace.runSpeedKmh}`);
+  // Ciclo mixto más lento que solo carrera
+  assert(pace.cyclePaceSecPerKm > pace.runPaceSecPerKm, 'ritmo ciclo más lento que solo carrera');
+  assert(pace.cycleKm < pace.totalKm, 'km ciclo < km total (excluye warm/cool)');
+
+  const noDist = A.computeSessionPaceMetrics({
+    elapsedSec: elapsed,
+    structure: st,
+    speeds: { walkSpeed: 5, runSpeed: 7.5, coolSpeed: 4.5 }
+  });
+  assert(noDist && noDist.distanceSource === 'estimated', 'sin distancia → estimado');
+  assert(noDist.cyclePaceLabel, 'estima ritmo de ciclo sin distancia');
+
+  const cont = A.computeSessionPaceMetrics({
+    elapsedSec: 40 * 60,
+    distanceKm: 5,
+    structure: { warmSeconds: 300, coolSeconds: 300, runSeconds: 30 * 60, walkSeconds: 0, reps: 1 },
+    speeds: { walkSpeed: 5, runSpeed: 7.5, coolSpeed: 4.5 }
+  });
+  assert(cont && cont.isContinuous, 'detecta carrera continua');
+  assert(cont.cycleSec === 30 * 60, 'continuo: 30 min de ciclo');
+  assert(A.formatPacePerKm(480) === '8:00/km', 'formatPacePerKm 480s → 8:00/km');
+}
+
 if (failed) {
   console.error(`\n${failed} fallos`);
   process.exit(1);

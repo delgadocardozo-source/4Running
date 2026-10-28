@@ -1278,6 +1278,129 @@
     };
   }
 
+  /**
+   * Ritmos objetivos a partir de tiempo + distancia + estructura.
+   * Excluye calentamiento/enfriamiento del ritmo de ciclo.
+   * Si hay distancia total, reparte km por pesos velocidad×tiempo (no inventa GPS).
+   */
+  function formatPacePerKm(secPerKm) {
+    if (!Number.isFinite(secPerKm) || secPerKm <= 0) return null;
+    let total = Math.round(secPerKm);
+    let m = Math.floor(total / 60);
+    let s = total % 60;
+    if (s === 60) {
+      m += 1;
+      s = 0;
+    }
+    return `${m}:${String(s).padStart(2, '0')}/km`;
+  }
+
+  function computeSessionPaceMetrics({ elapsedSec, distanceKm, structure, speeds = {} } = {}) {
+    const totalSec = Number(elapsedSec) || 0;
+    if (totalSec <= 0) return null;
+
+    const st = structureFromClassic(structure || {});
+    const m = metrics(st);
+    const warm = Number(st.warmSeconds) || 0;
+    const cool = Number(st.coolSeconds) || 0;
+    const runSecPrescribed = Number(m.totalRunSec) || 0;
+    const walkSecPrescribed = Number(m.totalWalkSec) || 0;
+    const cycleSecPrescribed = runSecPrescribed + walkSecPrescribed;
+    const hasStructure = warm + cool + cycleSecPrescribed > 0;
+
+    const walkSp = Number(speeds.walkSpeed) || 5;
+    const runSp = Number(speeds.runSpeed) || 7.5;
+    const coolSp = Number(speeds.coolSpeed) || 4.5;
+
+    let warmSecActual;
+    let coolSecActual;
+    let cycleSec;
+    if (hasStructure && totalSec > warm + cool && cycleSecPrescribed > 0) {
+      warmSecActual = warm;
+      coolSecActual = cool;
+      cycleSec = totalSec - warm - cool;
+    } else if (hasStructure) {
+      const structTotal = warm + cool + cycleSecPrescribed;
+      const scale = structTotal > 0 ? totalSec / structTotal : 1;
+      warmSecActual = warm * scale;
+      coolSecActual = cool * scale;
+      cycleSec = cycleSecPrescribed * scale;
+    } else {
+      warmSecActual = 0;
+      coolSecActual = 0;
+      cycleSec = totalSec;
+    }
+
+    let runSec;
+    let walkSec;
+    if (cycleSecPrescribed > 0) {
+      runSec = cycleSec * (runSecPrescribed / cycleSecPrescribed);
+      walkSec = cycleSec * (walkSecPrescribed / cycleSecPrescribed);
+    } else {
+      runSec = cycleSec;
+      walkSec = 0;
+    }
+
+    const wWarm = walkSp * warmSecActual;
+    const wCool = coolSp * coolSecActual;
+    const wRun = runSp * runSec;
+    const wWalk = walkSp * walkSec;
+    const wTotal = wWarm + wCool + wRun + wWalk;
+
+    const confirmed = typeof distanceKm === 'number' && Number.isFinite(distanceKm) && distanceKm > 0;
+    let runKm;
+    let cycleKm;
+    let totalKm;
+    let distanceSource;
+    if (confirmed && wTotal > 0) {
+      totalKm = distanceKm;
+      runKm = distanceKm * (wRun / wTotal);
+      cycleKm = distanceKm * ((wRun + wWalk) / wTotal);
+      distanceSource = 'attributed';
+    } else if (wTotal > 0) {
+      runKm = wRun / 3600;
+      cycleKm = (wRun + wWalk) / 3600;
+      totalKm = wTotal / 3600;
+      distanceSource = 'estimated';
+    } else if (confirmed) {
+      totalKm = distanceKm;
+      runKm = distanceKm;
+      cycleKm = distanceKm;
+      distanceSource = 'total';
+    } else {
+      return null;
+    }
+
+    const runPace = runKm > 0.01 ? runSec / runKm : null;
+    const cyclePace = cycleKm > 0.01 ? cycleSec / cycleKm : null;
+    const overallPace = totalKm > 0.01 ? totalSec / totalKm : null;
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    return {
+      elapsedSec: Math.round(totalSec),
+      warmSec: Math.round(warmSecActual),
+      coolSec: Math.round(coolSecActual),
+      cycleSec: Math.round(cycleSec),
+      runSec: Math.round(runSec),
+      walkSec: Math.round(walkSec),
+      runKm: round2(runKm),
+      cycleKm: round2(cycleKm),
+      totalKm: round2(totalKm),
+      runPaceSecPerKm: runPace,
+      cyclePaceSecPerKm: cyclePace,
+      overallPaceSecPerKm: overallPace,
+      runPaceLabel: formatPacePerKm(runPace),
+      cyclePaceLabel: formatPacePerKm(cyclePace),
+      overallPaceLabel: formatPacePerKm(overallPace),
+      runSpeedKmh: runPace > 0 ? Math.round((3600 / runPace) * 10) / 10 : null,
+      cycleSpeedKmh: cyclePace > 0 ? Math.round((3600 / cyclePace) * 10) / 10 : null,
+      overallSpeedKmh: overallPace > 0 ? Math.round((3600 / overallPace) * 10) / 10 : null,
+      isContinuous: walkSecPrescribed === 0,
+      hasStructure,
+      distanceSource
+    };
+  }
+
   window.PaceAdaptive = {
     ENGINE_VERSION,
     DEFAULT_PARAMS,
@@ -1312,6 +1435,8 @@
     openItems,
     validateStructureMath,
     priorityDimensionFor,
-    formatBlockSec
+    formatBlockSec,
+    formatPacePerKm,
+    computeSessionPaceMetrics
   };
 })();

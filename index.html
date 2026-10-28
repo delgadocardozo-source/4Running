@@ -377,7 +377,7 @@
             <small>Mayor tramo de carrera sin caminar.</small>
             <small id="sessionExtraLabel" hidden></small>
           </div>
-          <div class="form-grid two">
+          <div class="form-grid close-data-grid">
             <label>Fecha<input type="date" id="sessionDate"></label>
             <label>Realizado en
               <select id="sessionType">
@@ -385,14 +385,22 @@
                 <option value="Exterior">Aire libre</option>
               </select>
             </label>
-            <label>Tiempo<input type="text" id="sessionTime" placeholder="38:12" inputmode="numeric" autocomplete="off"></label>
-            <label>Distancia
-              <span class="input-unit">
-                <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00">
+            <label class="close-time-field">Tiempo
+              <input type="text" id="sessionTime" placeholder="38:12" inputmode="numeric" autocomplete="off" enterkeyhint="done" aria-describedby="timeHint">
+              <small class="field-hint" id="timeHint">Solo números: 3812 → 38:12. También podés pegar 38:12.</small>
+            </label>
+            <label class="close-distance-field">Distancia
+              <span class="input-unit close-input-unit">
+                <input type="number" id="sessionDistance" step="0.01" min="0" placeholder="3.00" inputmode="decimal">
                 <span>km</span>
               </span>
               <small class="field-hint" id="distanceHint">Si viene del timer, arranca como estimada hasta que la confirmes.</small>
             </label>
+          </div>
+          <div class="session-metrics-preview" id="sessionMetricsPreview" hidden>
+            <p class="metric-label">Ritmos (sin calentamiento ni enfriamiento)</p>
+            <div class="metrics-preview-grid" id="sessionMetricsPreviewBody"></div>
+            <small class="field-hint" id="sessionMetricsPreviewNote"></small>
           </div>
           <div class="distance-confirm-row" id="distanceConfirmRow">
             <span class="distance-est-pill" id="distanceEstPill">Estimada · sin confirmar</span>
@@ -446,6 +454,15 @@
         <div><span>Tiempo</span><strong id="adaptTime">—</strong></div>
         <div><span>Distancia</span><strong id="adaptDistance">—</strong></div>
         <div><span>Esfuerzo</span><strong id="adaptEffort">—</strong><small id="adaptEffortNote"></small></div>
+      </div>
+      <div class="adapt-pace-panel" id="adaptPacePanel" hidden>
+        <p class="metric-label">Métricas de ritmo</p>
+        <div class="finish-stats adapt-pace-stats">
+          <div><span>Ritmo ciclo</span><strong id="adaptCyclePace">—</strong><small id="adaptCyclePaceNote"></small></div>
+          <div><span>Ritmo carrera</span><strong id="adaptRunPace">—</strong><small id="adaptRunPaceNote"></small></div>
+          <div><span>Vel. media ciclo</span><strong id="adaptCycleSpeed">—</strong><small>sin warm/cool</small></div>
+        </div>
+        <p class="field-hint" id="adaptPaceHint"></p>
       </div>
       <p class="adapt-place" id="adaptPlace"></p>
       <p class="metric-label">Lo que haremos ahora</p>

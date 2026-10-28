@@ -628,6 +628,67 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
 .form-grid label, .pain-details label, #sessionForm > section label {
   display: grid; gap: 6px; color: var(--muted); font-size: 12px;
 }
+.close-data-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 12px;
+}
+.close-time-field,
+.close-distance-field {
+  grid-column: 1 / -1;
+}
+#sessionForm .close-data-grid input,
+#sessionForm .close-data-grid select {
+  width: 100%;
+  min-height: 52px;
+  font-size: 18px;
+  padding: 12px 2px;
+  text-align: left;
+  border-bottom-width: 1.5px;
+}
+#sessionTime {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  font-weight: 650;
+}
+.close-input-unit {
+  width: 100%;
+}
+.close-input-unit input {
+  flex: 1;
+  min-width: 0;
+}
+.session-metrics-preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+}
+.metrics-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.metrics-preview-grid div span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+.metrics-preview-grid div strong {
+  font-size: 18px;
+  letter-spacing: -0.03em;
+}
+.adapt-pace-panel { display: grid; gap: 8px; }
+.adapt-pace-stats { margin-top: 0; }
+.adapt-pace-stats small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+@media (max-width: 420px) {
+  .close-data-grid { grid-template-columns: 1fr; }
+  .metrics-preview-grid { grid-template-columns: 1fr; }
+}
 
 @media (min-width: 760px) {
   .modal { height: auto; }
