@@ -45,6 +45,7 @@
   let lastSaveResult = null;
   /** Tiempo del cronómetro al abrir el cierre (para no comparar contra un elapsed vivo). */
   let closeMeasuredTime = null;
+  let onboardStep = 1;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -1410,9 +1411,18 @@
     const bestCont = sorted.filter(s => s.source !== 'external').reduce((m, s) => Math.max(m, Number(s.maxRunBlockSec) || 0), 0);
     $('#bestContinuous').textContent = bestCont ? Coach().formatBlock(bestCont) : '—';
 
+    const empty = $('#historyEmpty');
+    if (empty) empty.hidden = sorted.length > 0;
+
     const trend = trendUserCopy(Coach().summarizeTrend(logs, plan));
     const readiness = Coach().assessRaceReadiness(logs, plan);
-    $('#historyTrend').innerHTML = `
+    $('#historyTrend').innerHTML = sorted.length === 0
+      ? `<div class="trend-block">
+          <span class="metric-label">Tu tendencia</span>
+          <strong class="metric-status">Sin datos aún</strong>
+          <p class="trend-detail">Completá tu primera sesión para ver confianza, precaución y ritmo del ciclo.</p>
+        </div>`
+      : `
       <div class="trend-block">
         <span class="metric-label">Tu tendencia</span>
         <strong class="metric-status ${trend.tone}">${escapeHtml(trend.title)}</strong>
@@ -1493,26 +1503,135 @@
       : 'Distancia confirmada por vos. Ya no se trata como estimada.';
   }
 
+  function collectOnboardingDraft() {
+    return {
+      goalType: selectedValue('onboardGoal') || '5k_finish_runwalk',
+      continuousAbility: selectedValue('onboardAbility') || '1min',
+      sessionsPerWeek: Number(selectedValue('onboardDays') || 3),
+      environment: selectedValue('onboardEnv') || 'both',
+      hasPain: selectedValue('onboardPain') === 'yes',
+      painNote: $('#onboardPainNote')?.value?.trim() || '',
+      runSpeed: parseOptionalNumber($('#onboardRunSpeed')?.value),
+      raceDate: $('#onboardRaceDate')?.value || null
+    };
+  }
+
+  function updateOnboardingPreview() {
+    if (!window.PaceAdaptive) return;
+    const draft = collectOnboardingDraft();
+    const intake = window.PaceAdaptive.normalizeIntake(draft);
+    const st = window.PaceAdaptive.startingStructureForAbility(intake.continuousAbility, {
+      conservative: intake.hasPain
+    });
+    const body = $('#onboardPreviewBody');
+    const note = $('#onboardPreviewNote');
+    if (body) body.textContent = window.PaceAdaptive.describeStructure(st);
+    if (note) {
+      const stageLabel = ({
+        1: 'Caminar', 2: 'Caminar y trotar', 3: 'Desarrollo continuo',
+        4: 'Completar 5K', 5: 'Mejorar rendimiento', 6: 'Objetivos posteriores'
+      })[intake.intakeStage] || '';
+      note.textContent = `${stageLabel} · ${intake.sessionsPerWeek} días/sem${intake.hasPain ? ' · arranque conservador por molestia' : ''}`;
+    }
+  }
+
+  function showOnboardStep(step) {
+    onboardStep = step;
+    $$('[data-onboard-step]').forEach(el => {
+      el.hidden = Number(el.dataset.onboardStep) !== step;
+    });
+    $$('[data-onboard-dot]').forEach(el => {
+      const n = Number(el.dataset.onboardDot);
+      el.classList.toggle('is-current', n === step);
+      el.classList.toggle('is-done', n < step);
+    });
+    const titles = {
+      1: 'Tu objetivo',
+      2: 'Tu nivel hoy',
+      3: 'Cómo entrenás',
+      4: 'Último detalle'
+    };
+    if ($('#onboardTitle')) $('#onboardTitle').textContent = titles[step] || 'Tu punto de partida';
+    $('#onboardBack').hidden = step === 1;
+    $('#onboardNext').hidden = step === 4;
+    $('#onboardFinish').hidden = step !== 4;
+    if (step === 4) updateOnboardingPreview();
+  }
+
+  function openOnboarding() {
+    onboardStep = 1;
+    showOnboardStep(1);
+    const painWrap = $('#onboardPainNoteWrap');
+    if (painWrap) painWrap.hidden = selectedValue('onboardPain') !== 'yes';
+    const dialog = $('#onboardingDialog');
+    if (dialog && !dialog.open) dialog.showModal();
+  }
+
+  function finishOnboarding() {
+    const draft = collectOnboardingDraft();
+    if (draft.hasPain && !draft.painNote) {
+      showToast('Indicá dónde está la molestia');
+      return;
+    }
+    try {
+      if (draft.runSpeed) {
+        settings.runSpeed = draft.runSpeed;
+        persistSettings();
+      }
+      if (draft.environment === 'outdoor' || draft.environment === 'treadmill') {
+        settings.lastEnvironment = draft.environment;
+        persistSettings();
+      }
+      plan = Coach().applyIntake(draft, settings);
+      logs = Coach().loadLogs();
+      $('#onboardingDialog')?.close();
+      reloadWorkoutFromPlan();
+      setupDates();
+      renderSettings();
+      renderHistory();
+      renderHome();
+      showToast('Plan creado a tu medida');
+      navTo('home');
+    } catch (err) {
+      console.error('[pace01] onboarding', err);
+      showToast('No se pudo crear el plan. Probá de nuevo.');
+    }
+  }
+
+  async function applyRecalibration(direction) {
+    const out = Coach().recalibrateFocus(plan, logs, settings, direction);
+    plan = out.plan;
+    Coach().savePlan(plan);
+    reloadWorkoutFromPlan();
+    renderHome();
+    showToast(out.message || (out.changed ? 'Plan recalibrado' : 'Sin cambios'));
+  }
+
   function renderHome() {
+    const needsIntro = Coach().needsOnboarding(plan);
     const readiness = Coach().assessRaceReadiness(logs, plan);
-    const focus = Coach().getFocusSession(plan);
-    const underlying = Coach().getUnderlyingPlanItem(plan, focus);
+    const focus = needsIntro ? null : Coach().getFocusSession(plan);
+    const underlying = focus ? Coach().getUnderlyingPlanItem(plan, focus) : null;
     const isRest = focus?.kind === 'rest';
     const isRun = focus?.kind === 'run';
 
+    if ($('#todayOnboarding')) $('#todayOnboarding').hidden = !needsIntro;
     const sessionMatch = String(focus?.title || '').match(/sesi[oó]n\s*(\d+)/i);
-    $('#coachEyebrow').textContent = sessionMatch ? `Hoy · Sesión ${sessionMatch[1]}` : 'Hoy';
-    $('#todayRun').hidden = !isRun;
-    $('#todayRest').hidden = !isRest;
-    $('#todayDone').hidden = Boolean(focus);
+    if ($('#coachEyebrow')) {
+      $('#coachEyebrow').textContent = sessionMatch ? `Hoy · Sesión ${sessionMatch[1]}` : 'Hoy';
+    }
+    $('#todayRun').hidden = !isRun || needsIntro;
+    $('#todayRest').hidden = !isRest || needsIntro;
+    $('#todayDone').hidden = needsIntro || Boolean(focus);
     const todayIso = localDateISO();
     const trainedToday = Coach().hasTrainingOnDate(logs, todayIso);
     const recoveredToday = Coach().hasRecoveryOnDate(logs, todayIso);
     // Recuperación voluntaria solo si hay intervalos pendientes y hoy no entrenaste ni marcaste recuperación.
-    $('#recoveryOffer').hidden = !(isRun && !trainedToday && !recoveredToday);
-    $('#quietActions').hidden = !focus;
-    $('#rescheduleSession').hidden = !focus;
-    $('#skipSession').hidden = !focus;
+    $('#recoveryOffer').hidden = needsIntro || !(isRun && !trainedToday && !recoveredToday);
+    $('#quietActions').hidden = needsIntro || !focus;
+    $('#rescheduleSession').hidden = needsIntro || !focus;
+    $('#skipSession').hidden = needsIntro || !focus;
+    if ($('#recalibrateRow')) $('#recalibrateRow').hidden = needsIntro || !isRun;
 
     const scheduleNote = $('#scheduleNote');
     if (isRun && underlying?.status === 'rescheduled' && underlying.scheduledDate) {
@@ -1556,7 +1675,8 @@
       const st = focus.structure;
       const minutes = structureDurationMin(st);
       const km = estimateStructureKm(st);
-      $('#coachTitle').textContent = 'Intervalos';
+      const continuous = Number(st.walkSeconds) === 0;
+      $('#coachTitle').textContent = continuous ? 'Carrera continua' : 'Intervalos';
       $('#homeMinutes').textContent = String(minutes);
       $('#homeKm').textContent = km.toFixed(2).replace('.', ',');
       const cue = (sec) => formatTime(sec).replace(/^0/, '');
@@ -1618,26 +1738,32 @@
       }
     }
 
-    $('#readinessBadge').textContent = readiness.label;
+    const goalLabel = plan?.goal?.label || readiness.focusTarget || 'Entrenar';
+    $('#readinessBadge').textContent = needsIntro ? 'Onboarding' : readiness.label;
     $('#readinessBadge').className = `sr-only distance-badge level-${readiness.level}`;
     $('#readinessTarget').textContent = `foco ${readiness.focusTarget}`;
-    $('#readinessConfidence').textContent = readiness.confidenceLabel;
+    $('#readinessConfidence').textContent = needsIntro ? 'Sin perfil aún' : readiness.confidenceLabel;
     $('#readinessConfidence').className = `distance-badge conf conf-${readiness.confidence}`;
-    $('#readinessHeadline').textContent = `Objetivo · ${readiness.focusTarget}`;
+    $('#readinessHeadline').textContent = needsIntro ? 'Objetivo · por definir' : `Objetivo · ${goalLabel}`;
     $('#readinessSummary').textContent = 'Decidimos por evidencia, no por entusiasmo.';
-    $('#evidenceNeed').textContent = evidenceCopy(readiness);
-    const fill = readiness.level === 'listo' ? 100 : readiness.level === 'cerca' ? 58 : 22;
+    $('#evidenceNeed').textContent = needsIntro
+      ? 'Completá el onboarding para armar un plan acorde a tu nivel.'
+      : evidenceCopy(readiness);
+    const fill = needsIntro ? 8 : readiness.level === 'listo' ? 100 : readiness.level === 'cerca' ? 58 : 22;
     $('#readinessBar')?.style.setProperty('--fill', `${fill}%`);
-    $('#checkpointLabel').textContent = formatShortDate(plan.checkpointDate);
+    $('#checkpointLabel').textContent = plan?.checkpointDate ? formatShortDate(plan.checkpointDate) : '—';
     const checkpointDays = readiness.daysToCheckpoint;
-    $('#checkpointCountdown').textContent = checkpointDays == null
+    $('#checkpointCountdown').textContent = !plan?.checkpointDate
       ? ''
-      : checkpointDays > 0
-        ? `${checkpointDays} días`
-        : checkpointDays === 0
-          ? 'hoy'
-          : 'checkpoint pasado · revisar evidencia';
+      : checkpointDays == null
+        ? ''
+        : checkpointDays > 0
+          ? `${checkpointDays} días`
+          : checkpointDays === 0
+            ? 'hoy'
+            : 'checkpoint pasado · revisar evidencia';
 
+    if ($('#homeSecondary')) $('#homeSecondary').hidden = needsIntro;
     renderSequence();
   }
 
@@ -2084,6 +2210,22 @@
     $('#walkSpeed').value = settings.walkSpeed;
     $('#runSpeed').value = settings.runSpeed;
     $('#coolSpeed').value = settings.coolSpeed;
+    if ($('#goalTypeSelect')) {
+      $('#goalTypeSelect').value = plan?.goal?.type || plan?.intake?.goalType || '5k_finish_runwalk';
+    }
+    if ($('#raceDateInput')) {
+      $('#raceDateInput').value = plan?.raceDate || plan?.goal?.raceDate || '';
+    }
+    if ($('#sessionsPerWeekSelect')) {
+      const spw = plan?.params?.sessionsPerWeek || plan?.intake?.sessionsPerWeek || 3;
+      $('#sessionsPerWeekSelect').value = String(spw);
+    }
+    if ($('#profileStageNote') && window.PaceAdaptive) {
+      const profile = window.PaceAdaptive.deriveProfile(logs, plan, settings);
+      $('#profileStageNote').textContent = plan?.onboardingCompleted
+        ? `Nivel: ${profile.stageLabel} · confianza ${profile.confidence}`
+        : 'Completá el onboarding para personalizar el plan.';
+    }
     syncToggleButtons();
   }
 
@@ -2103,13 +2245,23 @@
       coolSpeed: cool,
       countdown: $('#countdownToggle').checked,
       voice: $('#voiceToggle').checked,
-      sound: $('#soundToggle').checked
+      sound: $('#soundToggle').checked,
+      lastEnvironment: settings.lastEnvironment || null
     };
     persistSettings();
+    if (!Coach().needsOnboarding(plan)) {
+      plan = Coach().updatePlanPreferences(plan, {
+        goalType: $('#goalTypeSelect')?.value,
+        raceDate: $('#raceDateInput')?.value || null,
+        sessionsPerWeek: Number($('#sessionsPerWeekSelect')?.value || 3)
+      }, logs, settings);
+      Coach().savePlan(plan);
+    }
     refreshWorkoutSpeeds();
+    setupDates();
     renderSettings();
     renderHome();
-    showToast('Ajustes guardados');
+    showToast('Preferencias guardadas');
   }
 
   function openSpeedDialog() {
@@ -2261,10 +2413,22 @@
     $('#todayLabel').textContent = now.toLocaleDateString('es-PY', {
       weekday: 'short', day: 'numeric', month: 'short'
     }).replace('.', '');
-    const days = Coach().calendarDaysUntil(plan.raceDate, now);
-    $('#daysToRace').textContent = days == null ? '—' : String(Math.max(0, days));
+    const raceDate = plan?.raceDate || plan?.goal?.raceDate || null;
+    const days = raceDate ? Coach().calendarDaysUntil(raceDate, now) : null;
     const raceLabel = $('#raceDateLabel');
-    if (raceLabel) raceLabel.textContent = formatShortDate(plan.raceDate).toUpperCase();
+    const eyebrow = $('#raceCornerEyebrow');
+    const sub = $('#raceCornerSub');
+    if (!raceDate) {
+      if (eyebrow) eyebrow.textContent = 'Plan';
+      if (raceLabel) raceLabel.textContent = (plan?.goal?.label || 'Sin fecha').split(' ')[0] || 'PACE';
+      if (sub) sub.innerHTML = plan?.onboardingCompleted ? 'activo' : 'nuevo';
+      if ($('#daysToRace')) $('#daysToRace').textContent = '—';
+      return;
+    }
+    if (eyebrow) eyebrow.textContent = 'Objetivo';
+    if ($('#daysToRace')) $('#daysToRace').textContent = days == null ? '—' : String(Math.max(0, days));
+    if (sub) sub.innerHTML = `<b id="daysToRace">${days == null ? '—' : Math.max(0, days)}</b> días`;
+    if (raceLabel) raceLabel.textContent = formatShortDate(raceDate).toUpperCase();
   }
 
   function handleVisibility() {
@@ -2314,6 +2478,84 @@
       $('#adaptDialog')?.close();
       navTo('home');
       renderHome();
+    });
+    $('#startOnboardingHome')?.addEventListener('click', () => openOnboarding());
+    $('#onboardingDialog')?.addEventListener('cancel', (e) => {
+      if (Coach().needsOnboarding(plan)) e.preventDefault();
+    });
+    $('#onboardNext')?.addEventListener('click', () => {
+      if (onboardStep === 1 && !selectedValue('onboardGoal')) {
+        showToast('Elegí un objetivo');
+        return;
+      }
+      if (onboardStep === 2 && !selectedValue('onboardAbility')) {
+        showToast('Indicá tu nivel actual');
+        return;
+      }
+      if (onboardStep === 3 && !selectedValue('onboardDays')) {
+        showToast('Elegí días por semana');
+        return;
+      }
+      showOnboardStep(Math.min(4, onboardStep + 1));
+    });
+    $('#onboardBack')?.addEventListener('click', () => {
+      showOnboardStep(Math.max(1, onboardStep - 1));
+    });
+    $('#onboardFinish')?.addEventListener('click', finishOnboarding);
+    ['onboardGoal', 'onboardAbility', 'onboardDays', 'onboardEnv', 'onboardPain'].forEach(name => {
+      $$(`input[name="${name}"]`).forEach(el => {
+        el.addEventListener('change', () => {
+          if (name === 'onboardPain') {
+            const wrap = $('#onboardPainNoteWrap');
+            if (wrap) wrap.hidden = selectedValue('onboardPain') !== 'yes';
+          }
+          if (onboardStep === 4) updateOnboardingPreview();
+        });
+      });
+    });
+    $('#onboardRunSpeed')?.addEventListener('input', () => {
+      if (onboardStep === 4) updateOnboardingPreview();
+    });
+    $('#recalibrateEasier')?.addEventListener('click', () => applyRecalibration('easier'));
+    $('#recalibrateHarder')?.addEventListener('click', () => applyRecalibration('harder'));
+    $('#redoOnboarding')?.addEventListener('click', async () => {
+      const ok = await askConfirm({
+        title: '¿Rehacer el onboarding?',
+        body: 'Se borra el plan y el historial de este dispositivo. Exportá antes si querés conservarlos.',
+        ok: 'Empezar de nuevo',
+        cancel: 'Cancelar',
+        danger: true
+      });
+      if (!ok) return;
+      const out = Coach().resetToOnboarding();
+      plan = out.plan;
+      logs = out.logs;
+      reloadWorkoutFromPlan();
+      setupDates();
+      renderSettings();
+      renderHistory();
+      renderHome();
+      openOnboarding();
+    });
+    $('#loadDemoData')?.addEventListener('click', async () => {
+      const ok = await askConfirm({
+        title: '¿Cargar datos de demo?',
+        body: 'Reemplaza tu plan e historial actuales por un ejemplo de la semana 2.',
+        ok: 'Cargar demo',
+        cancel: 'Cancelar',
+        danger: true
+      });
+      if (!ok) return;
+      const out = Coach().loadDemoData(settings);
+      plan = out.plan;
+      logs = out.logs;
+      reloadWorkoutFromPlan();
+      setupDates();
+      renderSettings();
+      renderHistory();
+      renderHome();
+      showToast('Demo cargada');
+      navTo('home');
     });
     $('#goalDetailToggle').addEventListener('click', () => {
       const detail = $('#evidenceNeed');
@@ -2595,7 +2837,7 @@
       }, 600);
     }
     workout = buildWorkout();
-    remainingMs = workout[0].seconds * 1000;
+    remainingMs = (workout[0]?.seconds || 60) * 1000;
     originalBlockMs = remainingMs;
     setupDates();
     renderSettings();
@@ -2607,6 +2849,9 @@
     registerServiceWorker();
     const initial = location.hash.replace('#', '');
     if (['home', 'train', 'history', 'settings'].includes(initial)) navTo(initial);
+    if (Coach().needsOnboarding(plan)) {
+      setTimeout(() => openOnboarding(), 200);
+    }
   }
 
   init();

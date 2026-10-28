@@ -685,6 +685,35 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
 .adapt-pace-stats { margin-top: 0; }
 .adapt-pace-stats small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 
+.recalibrate-row {
+  display: grid; gap: 8px; margin-top: 12px;
+  padding: 12px 0 4px; border-top: 1px solid var(--line);
+}
+.recalibrate-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.recalibrate-actions .quiet-button { flex: 1; min-width: 140px; justify-content: center; }
+.settings-block {
+  display: grid; gap: 4px;
+  margin: 18px 0 8px; padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.settings-block:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.backup-block .primary-button,
+.backup-block .quiet-button,
+.settings-block .quiet-button { width: 100%; margin-top: 6px; }
+#goalTypeSelect, #sessionsPerWeekSelect, #raceDateInput {
+  width: min(180px, 46vw); text-align: right; min-height: 40px; font-size: 15px;
+}
+.history-empty {
+  padding: 28px 8px 12px; text-align: center; color: var(--muted);
+}
+.onboard-choices label { min-width: min(100%, 160px); }
+.onboard-speed-field {
+  display: grid; gap: 6px; margin-top: 14px;
+  color: var(--muted); font-size: 12px;
+}
+#onboardingDialog .choice-row label { font-size: 14px; }
+#todayOnboarding { padding: 12px 0 24px; }
+
 @media (max-width: 420px) {
   .close-data-grid { grid-template-columns: 1fr; }
   .metrics-preview-grid { grid-template-columns: 1fr; }

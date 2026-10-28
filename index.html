@@ -19,10 +19,10 @@
   <div class="app-shell">
     <header class="topbar">
       <button class="brand" data-nav="home" aria-label="Ir al inicio">PACE/01</button>
-      <div class="race-corner" aria-label="Cuenta regresiva a la carrera">
-        <span>Carrera</span>
-        <strong id="raceDateLabel">1 NOV</strong>
-        <em><b id="daysToRace">—</b> días</em>
+      <div class="race-corner" aria-label="Objetivo" id="raceCorner">
+        <span id="raceCornerEyebrow">Objetivo</span>
+        <strong id="raceDateLabel">—</strong>
+        <em id="raceCornerSub"><b id="daysToRace">—</b> días</em>
       </div>
       <span class="sr-only" id="todayLabel">Hoy</span>
       <button class="icon-button" id="installButton" aria-label="Instalar PACE/01" title="Instalar app" hidden>
@@ -80,7 +80,21 @@
           <button class="primary-button today-start" id="startWorkoutHome" type="button">Iniciar entrenamiento</button>
           <button class="quiet-button today-log-done" id="logPlanSession" type="button">Registrar sesión hecha</button>
           <button class="text-button today-preview" id="previewWorkout" type="button">Ver bloques</button>
+          <div class="recalibrate-row" id="recalibrateRow" hidden>
+            <p class="field-hint">¿Cómo se siente esta sesión prescrita?</p>
+            <div class="recalibrate-actions">
+              <button type="button" class="quiet-button" id="recalibrateEasier">Me queda difícil</button>
+              <button type="button" class="quiet-button" id="recalibrateHarder">Me queda fácil</button>
+            </div>
+          </div>
           <aside class="home-adapt" id="homeAdaptNote" hidden></aside>
+        </div>
+
+        <div id="todayOnboarding" hidden>
+          <p class="eyebrow">Bienvenida</p>
+          <h1>Armemos tu plan</h1>
+          <p class="lead">Unas preguntas cortas para empezar en tu nivel — no en un plan genérico.</p>
+          <button class="primary-button today-start" id="startOnboardingHome" type="button">Empezar</button>
         </div>
 
         <div id="todayRest" hidden>
@@ -233,6 +247,10 @@
         <p class="history-quiet">
           <span id="historyCount">0</span> registros · continuo <span id="bestContinuous">—</span> · <span id="bestDistance">—</span>
         </p>
+        <div class="history-empty" id="historyEmpty" hidden>
+          <p class="lead">Todavía no hay entrenamientos.</p>
+          <p class="field-hint">Cuando completes una sesión, acá vas a ver ritmos, esfuerzo y cómo adaptamos el plan.</p>
+        </div>
         <div class="history-list" id="historyList"></div>
       </section>
 
@@ -242,40 +260,81 @@
           <h1>Preferencias</h1>
         </div>
         <form class="settings-list" id="settingsForm" novalidate>
-          <label class="setting-row">
-            <span>Velocidad al caminar<small>3–8 km/h</small></span>
-            <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="walkSpeed" value="5.0" inputmode="decimal"><span>km/h</span></span>
-          </label>
-          <label class="setting-row">
-            <span>Velocidad al correr<small>5–16 km/h</small></span>
-            <span class="input-unit"><input type="number" step="0.1" min="5" max="16" id="runSpeed" value="7.5" inputmode="decimal"><span>km/h</span></span>
-          </label>
-          <label class="setting-row">
-            <span>Velocidad al enfriar<small>3–8 km/h</small></span>
-            <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="coolSpeed" value="4.5" inputmode="decimal"><span>km/h</span></span>
-          </label>
-          <label class="setting-row toggle-row">
-            <span>Alertas de sonido<small>Tonos al cambiar de bloque</small></span>
-            <input type="checkbox" id="soundToggle" checked>
-          </label>
-          <label class="setting-row toggle-row">
-            <span>Voz<small>Correr, caminar, enfriar</small></span>
-            <input type="checkbox" id="voiceToggle" checked>
-          </label>
-          <label class="setting-row toggle-row">
-            <span>Cuenta regresiva<small>5 segundos antes del cambio</small></span>
-            <input type="checkbox" id="countdownToggle" checked>
-          </label>
-          <div class="setting-row static-row">
-            <span>Pantalla activa<small>Se enciende en Listo para entrenar</small></span>
+          <div class="settings-block">
+            <p class="metric-label">Tu plan</p>
+            <label class="setting-row">
+              <span>Objetivo</span>
+              <select id="goalTypeSelect">
+                <option value="habit">Crear hábito</option>
+                <option value="5k_finish_runwalk">Completar 5K</option>
+                <option value="5k_pb">Mejorar 5K</option>
+                <option value="10k">Preparar 10K</option>
+                <option value="maintenance">Mantener forma</option>
+              </select>
+            </label>
+            <label class="setting-row">
+              <span>Fecha objetivo<small>Carrera o meta</small></span>
+              <input type="date" id="raceDateInput">
+            </label>
+            <label class="setting-row">
+              <span>Días por semana<small>2–4</small></span>
+              <select id="sessionsPerWeekSelect">
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <p class="setting-note" id="profileStageNote">Nivel: —</p>
+          </div>
+          <div class="settings-block">
+            <p class="metric-label">Velocidades</p>
+            <label class="setting-row">
+              <span>Velocidad al caminar<small>3–8 km/h</small></span>
+              <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="walkSpeed" value="5.0" inputmode="decimal"><span>km/h</span></span>
+            </label>
+            <label class="setting-row">
+              <span>Velocidad al correr<small>5–16 km/h</small></span>
+              <span class="input-unit"><input type="number" step="0.1" min="5" max="16" id="runSpeed" value="7.5" inputmode="decimal"><span>km/h</span></span>
+            </label>
+            <label class="setting-row">
+              <span>Velocidad al enfriar<small>3–8 km/h</small></span>
+              <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="coolSpeed" value="4.5" inputmode="decimal"><span>km/h</span></span>
+            </label>
+          </div>
+          <div class="settings-block">
+            <p class="metric-label">Alertas</p>
+            <label class="setting-row toggle-row">
+              <span>Alertas de sonido<small>Tonos al cambiar de bloque</small></span>
+              <input type="checkbox" id="soundToggle" checked>
+            </label>
+            <label class="setting-row toggle-row">
+              <span>Voz<small>Correr, caminar, enfriar</small></span>
+              <input type="checkbox" id="voiceToggle" checked>
+            </label>
+            <label class="setting-row toggle-row">
+              <span>Cuenta regresiva<small>5 segundos antes del cambio</small></span>
+              <input type="checkbox" id="countdownToggle" checked>
+            </label>
+            <div class="setting-row static-row">
+              <span>Pantalla activa<small>Se enciende en Listo para entrenar</small></span>
+            </div>
           </div>
           <div class="setting-actions">
-            <button class="primary-button accent-button" type="submit">Guardar</button>
-            <button class="quiet-button" type="button" id="exportHistory">Exportar mis datos</button>
-            <button class="quiet-button" type="button" id="restoreHistory">Restaurar datos</button>
+            <button class="primary-button accent-button" type="submit">Guardar preferencias</button>
+          </div>
+          <div class="settings-block backup-block">
+            <p class="metric-label">Respaldo</p>
+            <p class="setting-note">Los datos quedan en este dispositivo. Exportá una copia antes de cambiar de teléfono o borrar el navegador.</p>
+            <button class="primary-button" type="button" id="exportHistory">Exportar mis datos</button>
+            <button class="quiet-button" type="button" id="restoreHistory">Restaurar desde archivo</button>
             <input type="file" id="restoreFile" accept="application/json,.json" hidden>
           </div>
-          <p class="setting-note">Los datos quedan en este dispositivo. Exportá una copia antes de cambiar de iPhone, borrar Safari o reinstalar la app.</p>
+          <div class="settings-block">
+            <p class="metric-label">Cuenta / plan</p>
+            <button class="quiet-button" type="button" id="redoOnboarding">Rehacer onboarding</button>
+            <button class="quiet-button" type="button" id="loadDemoData">Cargar datos de demo</button>
+            <p class="setting-note">La demo reemplaza tu plan e historial actuales.</p>
+          </div>
         </form>
       </section>
     </main>
@@ -499,6 +558,94 @@
       <div class="modal-actions">
         <button class="quiet-button" type="submit" id="confirmCancel" value="cancel">Volver</button>
         <button class="primary-button accent-button" type="submit" id="confirmOk" value="ok">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="onboardingDialog" class="modal">
+    <form class="modal-card modal-card-fixed" id="onboardingForm" novalidate>
+      <div class="modal-scroll">
+        <div class="modal-heading">
+          <div>
+            <span class="eyebrow">PACE/01</span>
+            <h2 id="onboardTitle">Tu punto de partida</h2>
+          </div>
+        </div>
+        <div class="step-dots" id="onboardSteps" aria-hidden="true">
+          <span data-onboard-dot="1">Objetivo</span>
+          <span data-onboard-dot="2">Nivel</span>
+          <span data-onboard-dot="3">Hábitos</span>
+          <span data-onboard-dot="4">Salud</span>
+        </div>
+
+        <section data-onboard-step="1">
+          <p class="step-question">¿Cuál es tu objetivo principal?</p>
+          <div class="choice-row wrap onboard-choices">
+            <label><input type="radio" name="onboardGoal" value="habit"> Crear el hábito</label>
+            <label><input type="radio" name="onboardGoal" value="5k_finish_runwalk" checked> Completar 5K</label>
+            <label><input type="radio" name="onboardGoal" value="5k_pb"> Mejorar mi 5K</label>
+            <label><input type="radio" name="onboardGoal" value="10k"> Preparar 10K</label>
+            <label><input type="radio" name="onboardGoal" value="maintenance"> Mantener forma</label>
+          </div>
+        </section>
+
+        <section data-onboard-step="2" hidden>
+          <p class="step-question">¿Cuánto podés correr seguido hoy, sin caminar?</p>
+          <div class="choice-row wrap onboard-choices">
+            <label><input type="radio" name="onboardAbility" value="none"> Casi nada / solo camino</label>
+            <label><input type="radio" name="onboardAbility" value="1min" checked> 1–2 min</label>
+            <label><input type="radio" name="onboardAbility" value="5min"> ~5 min</label>
+            <label><input type="radio" name="onboardAbility" value="15min"> ~15 min</label>
+            <label><input type="radio" name="onboardAbility" value="30min"> ~30 min</label>
+            <label><input type="radio" name="onboardAbility" value="30plus"> Más de 30 min</label>
+          </div>
+          <p class="field-hint">Sé honesto: de esto sale tu primera sesión. Después el plan se adapta.</p>
+        </section>
+
+        <section data-onboard-step="3" hidden>
+          <p class="step-question">¿Cuántos días por semana querés entrenar?</p>
+          <div class="choice-row choice-large">
+            <label><input type="radio" name="onboardDays" value="2"> 2</label>
+            <label><input type="radio" name="onboardDays" value="3" checked> 3</label>
+            <label><input type="radio" name="onboardDays" value="4"> 4</label>
+          </div>
+          <p class="step-question">¿Dónde solés correr?</p>
+          <div class="choice-row wrap">
+            <label><input type="radio" name="onboardEnv" value="outdoor"> Aire libre</label>
+            <label><input type="radio" name="onboardEnv" value="treadmill"> Cinta</label>
+            <label><input type="radio" name="onboardEnv" value="both" checked> Ambos</label>
+          </div>
+          <label class="onboard-speed-field">Velocidad cómoda de trote (opcional)
+            <span class="input-unit close-input-unit">
+              <input type="number" id="onboardRunSpeed" step="0.1" min="5" max="16" placeholder="7.5" inputmode="decimal">
+              <span>km/h</span>
+            </span>
+          </label>
+        </section>
+
+        <section data-onboard-step="4" hidden>
+          <p class="step-question">¿Tenés alguna molestia ahora?</p>
+          <div class="choice-row choice-large">
+            <label><input type="radio" name="onboardPain" value="no" checked> No</label>
+            <label><input type="radio" name="onboardPain" value="yes"> Sí</label>
+          </div>
+          <label id="onboardPainNoteWrap" hidden>¿Dónde?
+            <input type="text" id="onboardPainNote" placeholder="Ej. rodilla derecha">
+          </label>
+          <label>Fecha objetivo (opcional)
+            <input type="date" id="onboardRaceDate">
+          </label>
+          <div class="session-metrics-preview" id="onboardPreview">
+            <p class="metric-label">Tu primera sesión</p>
+            <p id="onboardPreviewBody">—</p>
+            <small class="field-hint" id="onboardPreviewNote"></small>
+          </div>
+        </section>
+      </div>
+      <div class="modal-actions modal-actions-sticky">
+        <button class="quiet-button" type="button" id="onboardBack" hidden>Atrás</button>
+        <button class="primary-button accent-button" type="button" id="onboardNext">Siguiente</button>
+        <button class="primary-button accent-button" type="button" id="onboardFinish" hidden>Crear mi plan</button>
       </div>
     </form>
   </dialog>

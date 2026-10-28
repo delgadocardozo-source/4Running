@@ -5,9 +5,6 @@
   const LEGACY_LOGS_V2 = 'pace01.logs.v2';
   const LEGACY_SESSIONS = 'pace01.sessions.v1';
 
-  const RACE_DATE = '2026-11-01';
-  const CHECKPOINT_DATE = '2026-10-25';
-
   function clone(value) {
     return structuredClone ? structuredClone(value) : JSON.parse(JSON.stringify(value));
   }
@@ -16,11 +13,84 @@
     return [];
   }
 
+  /** Plan vacío para usuario nuevo (requiere onboarding). */
   function buildDefaultPlan() {
     return {
+      version: 4,
+      onboardingCompleted: false,
+      raceDate: null,
+      checkpointDate: null,
+      goal: null,
+      intake: null,
+      loadPolicy: 'Una variable de carga principal por progresión: duración/volumen primero, velocidad después.',
+      fiveKDefinition: 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).',
+      sessions: []
+    };
+  }
+
+  /** Datos de demostración (opcional desde Ajustes). No se cargan solos. */
+  function buildDemoLogs() {
+    return [
+      {
+        id: '2026-10-12-outdoor', date: '2026-10-12', type: 'Exterior', planSessionId: 'w1-s1',
+        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: 60,
+        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
+        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
+        execution: 'completed', progression: 'advance',
+        notes: 'Semana 1 · Sesión 1. Datos parciales.', source: 'seed'
+      },
+      {
+        id: '2026-10-13-outdoor', date: '2026-10-13', type: 'Exterior', planSessionId: 'w1-s2',
+        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: 60,
+        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
+        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
+        execution: 'completed', progression: 'advance',
+        notes: 'Semana 1 · Sesión 2. Datos parciales.', source: 'seed'
+      },
+      {
+        id: '2026-10-14-treadmill', date: '2026-10-14', type: 'Cinta', planSessionId: 'w1-s3',
+        time: '32:58', distanceKm: 2.99, distanceEstimated: false, maxRunBlockSec: 60,
+        couldContinue: '2-5', rpe: 4, pain: true,
+        painLocation: 'Lumbar leve al inicio; desapareció al entrar en calor',
+        painIntensity: 2,
+        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
+        execution: 'completed', progression: 'advance',
+        notes: 'Caminata 5,0 km/h. Carrera progresiva: 7,0 → 7,5 → 8,5 km/h.',
+        source: 'seed'
+      },
+      {
+        id: '2026-10-15-rest', date: '2026-10-15', type: 'Recuperación', planSessionId: 'w1-rest',
+        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: null,
+        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
+        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
+        execution: 'completed', progression: 'advance',
+        notes: 'Recuperación registrada.', source: 'seed'
+      }
+    ];
+  }
+
+  function buildDemoPlan() {
+    return {
       version: 3,
-      raceDate: RACE_DATE,
-      checkpointDate: CHECKPOINT_DATE,
+      onboardingCompleted: true,
+      raceDate: '2026-11-01',
+      checkpointDate: '2026-10-25',
+      goal: {
+        type: '5k_finish_runwalk',
+        label: 'Completar 5K (run/walk)',
+        raceDate: '2026-11-01',
+        checkpointDate: '2026-10-25'
+      },
+      intake: {
+        goalType: '5k_finish_runwalk',
+        continuousAbility: '1min',
+        sessionsPerWeek: 3,
+        environment: 'both',
+        hasPain: false,
+        intakeStage: 2,
+        declaredContinuousSec: 90,
+        completedAt: '2026-10-12'
+      },
       loadPolicy: 'Una variable de carga principal por progresión: duración/volumen primero, velocidad después.',
       fiveKDefinition: 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).',
       sessions: [
@@ -51,7 +121,6 @@
         {
           id: 'w2-s1', weekGroup: 2, order: 5, kind: 'run',
           title: 'Semana 2 · Sesión 1', status: 'pending', scheduledDate: null, blockedUntilRest: false,
-          // Misma duración de bloque; volumen vía reps en w2-s3 (una variable de carga).
           structure: { warmSeconds: 300, runSeconds: 120, walkSeconds: 120, coolSeconds: 300, reps: 7 },
           attempts: emptyAttempts()
         },
@@ -76,14 +145,13 @@
         {
           id: 'w2-s3', weekGroup: 2, order: 9, kind: 'run',
           title: 'Semana 2 · Sesión 3', status: 'pending', scheduledDate: null, blockedUntilRest: false,
-          // Solo cambia volumen (reps); no ritmo.
           structure: { warmSeconds: 300, runSeconds: 120, walkSeconds: 120, coolSeconds: 300, reps: 8 },
           attempts: emptyAttempts()
         },
         {
           id: 'w2-rest-c', weekGroup: 2, order: 10, kind: 'rest',
           title: 'Recuperación', status: 'pending', scheduledDate: null, blockedUntilRest: false,
-          structure: { rest: true, note: 'Antes del checkpoint del 25 oct: llegar fresco, no forzado.' },
+          structure: { rest: true, note: 'Antes del checkpoint: llegar fresco, no forzado.' },
           attempts: emptyAttempts()
         }
       ]
@@ -95,6 +163,9 @@
     if (!plan.version) plan.version = 3;
     plan.fiveKDefinition = plan.fiveKDefinition
       || 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).';
+    if (plan.onboardingCompleted == null) {
+      plan.onboardingCompleted = plan.sessions.some(s => s.kind === 'run');
+    }
     plan.sessions = plan.sessions.map(s => ({
       scheduledDate: null,
       blockedUntilRest: false,
@@ -103,6 +174,81 @@
       attempts: Array.isArray(s.attempts) ? s.attempts : []
     }));
     return plan;
+  }
+
+  function needsOnboarding(plan) {
+    if (!plan) return true;
+    if (plan.onboardingCompleted === false) return true;
+    const hasRun = (plan.sessions || []).some(s => s.kind === 'run');
+    return !hasRun;
+  }
+
+  function applyIntake(intake, settings = {}) {
+    if (!window.PaceAdaptive?.buildPlanFromIntake) {
+      throw new Error('Motor adaptativo no disponible para onboarding');
+    }
+    const plan = window.PaceAdaptive.buildPlanFromIntake(intake, settings);
+    savePlan(plan);
+    if (!localStorage.getItem(LOGS_KEY)) saveLogs([]);
+    return plan;
+  }
+
+  function updatePlanPreferences(plan, prefs = {}, logs = [], settings = {}) {
+    const next = clone(plan || buildDefaultPlan());
+    const A = window.PaceAdaptive;
+    if (prefs.goalType && A?.GOAL_CATALOG?.[prefs.goalType]) {
+      const g = A.GOAL_CATALOG[prefs.goalType];
+      next.goal = {
+        ...(next.goal || {}),
+        type: g.type,
+        label: g.label,
+        raceDate: prefs.raceDate || next.goal?.raceDate || next.raceDate || null,
+        checkpointDate: next.goal?.checkpointDate || next.checkpointDate || null
+      };
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(prefs.raceDate || ''))) {
+      next.raceDate = prefs.raceDate;
+      if (next.goal) next.goal.raceDate = prefs.raceDate;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(prefs.checkpointDate || ''))) {
+      next.checkpointDate = prefs.checkpointDate;
+      if (next.goal) next.goal.checkpointDate = prefs.checkpointDate;
+    }
+    const spw = Number(prefs.sessionsPerWeek);
+    if (Number.isFinite(spw) && spw >= 2 && spw <= 4) {
+      next.params = { ...(next.params || {}), sessionsPerWeek: spw, beginnerSessionsPerWeek: spw };
+    }
+    if (next.intake && prefs.goalType) next.intake.goalType = prefs.goalType;
+    next.athleteProfile = A ? A.deriveProfile(logs, next, settings) : next.athleteProfile;
+    if (A && next.onboardingCompleted) {
+      return A.ensureHorizon(next, logs, settings, null);
+    }
+    return next;
+  }
+
+  function recalibrateFocus(plan, logs, settings, direction) {
+    if (!window.PaceAdaptive?.recalibrateLoad) {
+      return { plan, changed: false, message: 'Recalibración no disponible.' };
+    }
+    const out = window.PaceAdaptive.recalibrateLoad(plan, logs, settings, direction);
+    if (out.plan) savePlan(out.plan);
+    return out;
+  }
+
+  function loadDemoData(settings = {}) {
+    let plan = normalizePlan(buildDemoPlan());
+    const logs = buildDemoLogs();
+    plan = upgradePlanAdaptive(plan, logs);
+    savePlan(plan);
+    saveLogs(logs);
+    return { plan, logs };
+  }
+
+  function resetToOnboarding() {
+    const plan = buildDefaultPlan();
+    savePlan(plan);
+    saveLogs([]);
+    return { plan, logs: [] };
   }
 
   function loadSettingsSoft() {
@@ -192,45 +338,9 @@
       localStorage.setItem(LOGS_KEY, JSON.stringify(migrated));
       return migrated;
     }
-    const seed = [
-      {
-        id: '2026-10-12-outdoor', date: '2026-10-12', type: 'Exterior', planSessionId: 'w1-s1',
-        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: 60,
-        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
-        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
-        execution: 'completed', progression: 'advance',
-        notes: 'Semana 1 · Sesión 1. Datos parciales.', source: 'seed'
-      },
-      {
-        id: '2026-10-13-outdoor', date: '2026-10-13', type: 'Exterior', planSessionId: 'w1-s2',
-        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: 60,
-        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
-        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
-        execution: 'completed', progression: 'advance',
-        notes: 'Semana 1 · Sesión 2. Datos parciales.', source: 'seed'
-      },
-      {
-        id: '2026-10-14-treadmill', date: '2026-10-14', type: 'Cinta', planSessionId: 'w1-s3',
-        time: '32:58', distanceKm: 2.99, distanceEstimated: false, maxRunBlockSec: 60,
-        couldContinue: '2-5', rpe: 4, pain: true,
-        painLocation: 'Lumbar leve al inicio; desapareció al entrar en calor',
-        painIntensity: 2,
-        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
-        execution: 'completed', progression: 'advance',
-        notes: 'Caminata 5,0 km/h. Carrera progresiva: 7,0 → 7,5 → 8,5 km/h.',
-        source: 'seed'
-      },
-      {
-        id: '2026-10-15-rest', date: '2026-10-15', type: 'Recuperación', planSessionId: 'w1-rest',
-        time: null, distanceKm: null, distanceEstimated: false, maxRunBlockSec: null,
-        couldContinue: null, rpe: null, pain: false, painLocation: '', painIntensity: null,
-        worseningDuringRun: false, alteredGait: false, forcedStop: false, severeWarning: false,
-        execution: 'completed', progression: 'advance',
-        notes: 'Recuperación registrada.', source: 'seed'
-      }
-    ];
-    localStorage.setItem(LOGS_KEY, JSON.stringify(seed));
-    return clone(seed);
+    // Usuario nuevo: historial vacío (sin seed de demo).
+    localStorage.setItem(LOGS_KEY, '[]');
+    return [];
   }
 
   function saveLogs(logs) {
@@ -1344,6 +1454,14 @@
     rescheduleFocus,
     planStats,
     buildDefaultPlan,
+    buildDemoPlan,
+    buildDemoLogs,
+    needsOnboarding,
+    applyIntake,
+    updatePlanPreferences,
+    recalibrateFocus,
+    loadDemoData,
+    resetToOnboarding,
     upgradePlanAdaptive,
     regenerateHorizonAfterAdvance,
     ENGINE_VERSION: () => (window.PaceAdaptive && window.PaceAdaptive.ENGINE_VERSION) || '3.0.0'

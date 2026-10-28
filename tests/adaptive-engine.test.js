@@ -343,6 +343,47 @@ const reportPath = path.join(root, 'tests/simulation-14d-report.json');
 fs.writeFileSync(reportPath, JSON.stringify({ A: Ares.rows, B: Bres.rows, C: Cres.rows, D: Dres.rows, F: Fres.rows }, null, 2));
 console.log('\nReporte escrito en', reportPath);
 
+console.log('\n=== Onboarding / intake → estructura inicial ===');
+{
+  const beginner = A.buildPlanFromIntake({
+    goalType: '5k_finish_runwalk',
+    continuousAbility: '1min',
+    sessionsPerWeek: 3,
+    environment: 'both',
+    hasPain: false
+  }, { walkSpeed: 5, runSpeed: 7.5, coolSpeed: 4.5 });
+  assert(beginner.onboardingCompleted === true, 'onboarding marca plan completo');
+  assert(beginner.intake?.intakeStage === 2, '1–2 min → stage 2');
+  const bRun = beginner.sessions.find(s => s.kind === 'run' && s.status === 'pending');
+  assert(bRun && bRun.structure.runSeconds === 60 && bRun.structure.walkSeconds === 120, 'principiante: 1:00/2:00');
+
+  const jogger = A.buildPlanFromIntake({
+    goalType: '5k_pb',
+    continuousAbility: '30min',
+    sessionsPerWeek: 3,
+    hasPain: false
+  }, { runSpeed: 9 });
+  const jRun = jogger.sessions.find(s => s.kind === 'run' && s.status === 'pending');
+  assert(jRun && jRun.structure.walkSeconds === 0 && jRun.structure.reps === 1, 'jogger 30 min → carrera continua');
+  assert(jRun.structure.runSeconds >= 20 * 60, 'jogger arranca cerca de 25 min continuo');
+  assert(jogger.athleteProfile.stage >= 5, 'jogger stage ≥ 5');
+
+  const none = A.buildPlanFromIntake({
+    continuousAbility: 'none',
+    goalType: 'habit',
+    hasPain: true,
+    painNote: 'rodilla'
+  }, {});
+  assert(none.intake.intakeStage === 1, 'solo camino + molestia → stage 1');
+  const nRun = none.sessions.find(s => s.kind === 'run');
+  assert(nRun && nRun.structure.runSeconds === 30, 'nivel none: bloques muy cortos');
+
+  const harder = A.recalibrateLoad(beginner, [], { runSpeed: 7.5 }, 'harder');
+  assert(harder.changed, 'recalibrar más difícil cambia la sesión');
+  const easier = A.recalibrateLoad(harder.plan, [], { runSpeed: 7.5 }, 'easier');
+  assert(easier.changed || easier.message, 'recalibrar más fácil responde');
+}
+
 console.log('\n=== Ritmo de ciclo (sin warm/cool) ===');
 {
   const st = { warmSeconds: 300, coolSeconds: 300, runSeconds: 120, walkSeconds: 120, reps: 7 };
