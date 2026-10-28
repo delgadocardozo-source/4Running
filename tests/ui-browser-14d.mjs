@@ -70,10 +70,15 @@ window.__rows = [];
 (async function(){
   const A = PaceAdaptive, C = PaceCoach;
   localStorage.clear();
-  // seed minimal settings
-  localStorage.setItem('pace01.settings.v1', JSON.stringify({walkSpeed:5,runSpeed:7.5,coolSpeed:4.5,countdown:true,voice:false,sound:false}));
-  let plan = C.loadPlan();
-  let logs = C.loadLogs();
+  const settings={walkSpeed:5,runSpeed:7.5,coolSpeed:4.5,countdown:true,voice:false,sound:false};
+  localStorage.setItem('pace01.settings.v1', JSON.stringify(settings));
+  let plan = A.buildPlanFromIntake({
+    goalType:'5k_finish_runwalk', continuousAbility:'1min', sessionsPerWeek:3,
+    environment:'both', hasPain:false
+  }, settings);
+  C.savePlan(plan);
+  let logs = [];
+  C.saveLogs(logs);
   function setDay(iso){
     const [y,m,d]=iso.split('-').map(Number);
     A.setClock(()=>new Date(y,m-1,d,10,0,0));

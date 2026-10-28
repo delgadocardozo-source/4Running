@@ -1,4 +1,4 @@
-const CACHE = 'pace01-v2.1.5';
+const CACHE = 'pace01-v2.2.0';
 const ASSETS = [
   './',
   './index.html',

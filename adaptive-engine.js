@@ -4,7 +4,29 @@
  * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.1.0';
+  const ENGINE_VERSION = '4.2.0';
+
+  /** Catálogo de objetivos de producto (intake + ajustes). */
+  const GOAL_CATALOG = {
+    habit: { type: 'habit', label: 'Crear el hábito de correr', horizonDays: 84 },
+    '5k_finish_runwalk': { type: '5k_finish_runwalk', label: 'Completar 5K (run/walk)', horizonDays: 56 },
+    '5k_pb': { type: '5k_pb', label: 'Mejorar mi 5K', horizonDays: 70 },
+    '10k': { type: '10k', label: 'Preparar 10K', horizonDays: 84 },
+    maintenance: { type: 'maintenance', label: 'Mantener forma', horizonDays: 90 }
+  };
+
+  /**
+   * Capacidad continua declarada en onboarding → stage + segundos de referencia.
+   * No sustituye evidencia real: los logs ganan cuando existen.
+   */
+  const CONTINUOUS_ABILITY = {
+    none: { key: 'none', stage: 1, demonstratedSec: 0, label: 'Casi no corro / solo camino' },
+    '1min': { key: '1min', stage: 2, demonstratedSec: 90, label: 'Hasta 1–2 min seguidos' },
+    '5min': { key: '5min', stage: 3, demonstratedSec: 5 * 60, label: 'Hasta ~5 min seguidos' },
+    '15min': { key: '15min', stage: 4, demonstratedSec: 15 * 60, label: 'Hasta ~15 min seguidos' },
+    '30min': { key: '30min', stage: 5, demonstratedSec: 28 * 60, label: 'Hasta ~30 min seguidos' },
+    '30plus': { key: '30plus', stage: 5, demonstratedSec: 35 * 60, label: 'Más de 30 min seguidos' }
+  };
 
   /** Parámetros de diseño 4Running (configurables; no leyes científicas). */
   const DEFAULT_PARAMS = {
@@ -339,6 +361,15 @@
     return 'volume';
   }
 
+  function stageFromContinuousSec(sec) {
+    if (sec == null) return null;
+    if (sec <= 0) return 1;
+    if (sec >= 30 * 60) return 5;
+    if (sec >= 15 * 60) return 4;
+    if (sec >= 5 * 60) return 3;
+    return 2;
+  }
+
   function deriveProfile(logs = [], plan = null, settings = {}) {
     const p = paramsOf(plan);
     const valid = validTrainingLogs(logs);
@@ -347,7 +378,12 @@
     const continuous = completed
       .map(l => Number(l.maxRunBlockSec) || 0)
       .filter(n => n > 0);
-    const demonstratedContinuousSec = continuous.length ? Math.max(...continuous) : null;
+    const fromLogs = continuous.length ? Math.max(...continuous) : null;
+    const declaredSec = plan?.intake?.declaredContinuousSec;
+    // Logs reales mandan; el intake solo arranca el perfil.
+    const demonstratedContinuousSec = fromLogs != null
+      ? fromLogs
+      : (declaredSec != null && Number.isFinite(Number(declaredSec)) ? Number(declaredSec) : null);
     const confirmedDistances = completed
       .filter(l => typeof l.distanceKm === 'number' && l.distanceEstimated === false)
       .map(l => l.distanceKm);
@@ -355,12 +391,13 @@
     const lastDate = last?.date || null;
     const gapDays = lastDate ? daysBetween(lastDate, localDateISO()) : null;
 
-    let stage = 2;
-    if (demonstratedContinuousSec == null && completed.length === 0) stage = 2;
-    else if (demonstratedContinuousSec != null && demonstratedContinuousSec >= 30 * 60) stage = 5;
-    else if (demonstratedContinuousSec != null && demonstratedContinuousSec >= 15 * 60) stage = 4;
-    else if (demonstratedContinuousSec != null && demonstratedContinuousSec >= 5 * 60) stage = 3;
-    else stage = 2;
+    let stage = stageFromContinuousSec(demonstratedContinuousSec);
+    if (stage == null) {
+      stage = Number(plan?.intake?.intakeStage) || 2;
+    }
+    if (completed.length === 0 && Number(plan?.intake?.intakeStage)) {
+      stage = Number(plan.intake.intakeStage);
+    }
 
     if ((plan?.goal?.type === '10k' || plan?.goal?.type === '5k_pb') && stage >= 5) stage = 6;
 
@@ -398,14 +435,12 @@
       .filter(s => s.kind === 'run' && s.status === 'completed')
       .sort((a, b) => (b.order || 0) - (a.order || 0))[0];
     const openRun = (plan?.sessions || []).find(s => s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled'));
+    const intakeAbility = plan?.intake?.continuousAbility || null;
+    const intakeFallback = startingStructureForAbility(intakeAbility || '1min', {
+      conservative: Boolean(plan?.intake?.hasPain)
+    });
     const baselineStructure = structureFromClassic(
-      openRun?.structure || lastRunItem?.structure || {
-        warmSeconds: p.warmSeconds,
-        coolSeconds: p.coolSeconds,
-        runSeconds: 120,
-        walkSeconds: p.defaultWalkSeconds,
-        reps: 7
-      }
+      openRun?.structure || lastRunItem?.structure || intakeFallback
     );
 
     const profile = {
@@ -420,6 +455,7 @@
         6: 'Objetivos posteriores'
       })[stage] || 'Caminar y trotar',
       demonstratedContinuousSec,
+      declaredContinuousSec: declaredSec != null ? Number(declaredSec) : null,
       maxConfirmedDistanceKm: confirmedDistances.length ? Math.max(...confirmedDistances) : null,
       sessionsCompleted: completed.length,
       recentGood,
@@ -427,11 +463,21 @@
       recentCount: recent.length,
       confidence,
       confidenceNote,
-      caution,
+      caution: plan?.intake?.hasPain && completed.length === 0
+        ? {
+            ...(assessCaution(logs, plan) || {}),
+            level: 'moderate',
+            reasons: [
+              ...((assessCaution(logs, plan) || {}).reasons || []),
+              'Indicaste molestia en el onboarding: arrancamos más conservador.'
+            ].filter(Boolean)
+          }
+        : caution,
       gapDays,
       needsReassess: gapDays != null && gapDays >= p.pauseDaysForReassess,
       baselineStructure,
       goalType: plan?.goal?.type || '5k_finish_runwalk',
+      intakeAbility,
       walkSpeed: settings.walkSpeed,
       runSpeed: settings.runSpeed,
       coolSpeed: settings.coolSpeed,
@@ -439,6 +485,211 @@
     };
     profile.priorityDimension = priorityDimensionFor(profile, plan);
     return profile;
+  }
+
+  function startingStructureForAbility(abilityKey, opts = {}) {
+    const params = DEFAULT_PARAMS;
+    const soft = Boolean(opts.conservative);
+    const key = CONTINUOUS_ABILITY[abilityKey] ? abilityKey : '1min';
+    const map = {
+      none: {
+        runSeconds: 30,
+        walkSeconds: soft ? 120 : 90,
+        reps: soft ? 5 : 6
+      },
+      '1min': {
+        runSeconds: soft ? 45 : 60,
+        walkSeconds: 120,
+        reps: soft ? 5 : 6
+      },
+      '5min': {
+        runSeconds: soft ? 3 * 60 : 4 * 60,
+        walkSeconds: soft ? 120 : 90,
+        reps: soft ? 4 : 5
+      },
+      '15min': {
+        runSeconds: soft ? 10 * 60 : 12 * 60,
+        walkSeconds: 0,
+        reps: 1
+      },
+      '30min': {
+        runSeconds: soft ? 22 * 60 : 25 * 60,
+        walkSeconds: 0,
+        reps: 1
+      },
+      '30plus': {
+        runSeconds: soft ? 28 * 60 : 32 * 60,
+        walkSeconds: 0,
+        reps: 1
+      }
+    };
+    const patch = map[key] || map['1min'];
+    return structureFromClassic({
+      warmSeconds: params.warmSeconds,
+      coolSeconds: params.coolSeconds,
+      ...patch
+    });
+  }
+
+  function normalizeIntake(raw = {}) {
+    const abilityKey = CONTINUOUS_ABILITY[raw.continuousAbility] ? raw.continuousAbility : '1min';
+    const ability = CONTINUOUS_ABILITY[abilityKey];
+    const goalKey = GOAL_CATALOG[raw.goalType] ? raw.goalType : '5k_finish_runwalk';
+    const goal = GOAL_CATALOG[goalKey];
+    const sessionsPerWeek = Math.min(4, Math.max(2, Number(raw.sessionsPerWeek) || 3));
+    const environment = ['outdoor', 'treadmill', 'both'].includes(raw.environment)
+      ? raw.environment
+      : 'both';
+    const hasPain = Boolean(raw.hasPain);
+    let intakeStage = ability.stage;
+    if ((goal.type === '10k' || goal.type === '5k_pb') && ability.stage >= 5) intakeStage = 6;
+    if (hasPain && intakeStage > 1) intakeStage = Math.max(1, intakeStage - 1);
+    const runSpeed = Number(raw.runSpeed);
+    return {
+      goalType: goal.type,
+      continuousAbility: abilityKey,
+      sessionsPerWeek,
+      environment,
+      hasPain,
+      painNote: hasPain ? String(raw.painNote || '').trim() : '',
+      runSpeed: Number.isFinite(runSpeed) && runSpeed >= 5 && runSpeed <= 16 ? runSpeed : null,
+      raceDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.raceDate || '')) ? raw.raceDate : null,
+      intakeStage,
+      declaredContinuousSec: hasPain
+        ? Math.max(0, Math.round(ability.demonstratedSec * 0.75))
+        : ability.demonstratedSec,
+      completedAt: null
+    };
+  }
+
+  function buildPlanFromIntake(rawIntake = {}, settings = {}) {
+    const intake = normalizeIntake(rawIntake);
+    intake.completedAt = localDateISO();
+    const goal = GOAL_CATALOG[intake.goalType] || GOAL_CATALOG['5k_finish_runwalk'];
+    const raceDate = intake.raceDate || addDaysISO(localDateISO(), goal.horizonDays);
+    const checkpointDate = addDaysISO(localDateISO(), 21);
+    const structure = startingStructureForAbility(intake.continuousAbility, {
+      conservative: intake.hasPain
+    });
+    const plan = {
+      version: 4,
+      engineVersion: ENGINE_VERSION,
+      onboardingCompleted: true,
+      intake,
+      goal: {
+        type: goal.type,
+        label: goal.label,
+        raceDate,
+        checkpointDate
+      },
+      raceDate,
+      checkpointDate,
+      loadPolicy: 'Una variable de carga principal por progresión: duración/volumen primero, velocidad después.',
+      fiveKDefinition: 'Listo = intentar terminar 5K con estrategia run/walk (no 5K continuo sin caminar).',
+      params: {
+        ...DEFAULT_PARAMS,
+        sessionsPerWeek: intake.sessionsPerWeek,
+        beginnerSessionsPerWeek: intake.sessionsPerWeek
+      },
+      sessions: [],
+      pendingSpeedSuggestion: null
+    };
+    plan.athleteProfile = deriveProfile([], plan, settings);
+    plan.sessions.push(makeRunItem(plan, structure, {
+      title: 'Sesión 1 · Tu punto de partida',
+      action: 'consolidate',
+      sessionGoal: 'Confirmar tu nivel de entrada',
+      justification: `Onboarding: ${CONTINUOUS_ABILITY[intake.continuousAbility].label}. Objetivo: ${goal.label}.`,
+      primaryDimension: plan.athleteProfile.priorityDimension,
+      estimatedKm: estimateKm(structure, settings)
+    }));
+    return ensureHorizon(plan, [], settings, {
+      action: 'consolidate',
+      reason: 'Plan inicial personalizado desde onboarding.'
+    });
+  }
+
+  /**
+   * Recalibración explícita del usuario sobre la próxima sesión pendiente.
+   * direction: 'easier' | 'harder'
+   */
+  function recalibrateLoad(plan, logs = [], settings = {}, direction = 'easier') {
+    const next = clone(plan || { sessions: [] });
+    const openRun = (next.sessions || []).find(s =>
+      s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled')
+    );
+    if (!openRun) {
+      return { plan: next, changed: false, message: 'No hay una sesión pendiente para recalibrar.' };
+    }
+    const profile = deriveProfile(logs, next, settings);
+    const action = direction === 'harder' ? 'progress_continuous' : 'reduce';
+    const candidates = generateCandidates(openRun.structure, action, profile, next);
+    const picked = pickCandidate(candidates, action);
+    if (!picked?.structure) {
+      return { plan: next, changed: false, message: 'No encontramos un ajuste viable ahora.' };
+    }
+    const prev = structureFromClassic(openRun.structure);
+    const neo = structureFromClassic(picked.structure);
+    const same = describeStructure(prev) === describeStructure(neo);
+    if (same && direction === 'harder') {
+      // Si no hay progreso de continuo, intentar volumen
+      const vol = generateCandidates(openRun.structure, 'progress_volume', profile, next);
+      const pickVol = pickCandidate(vol, 'progress_volume');
+      if (pickVol?.structure && describeStructure(pickVol.structure) !== describeStructure(prev)) {
+        openRun.structure = structureFromClassic(pickVol.structure);
+      } else {
+        return {
+          plan: next,
+          changed: false,
+          message: 'Ya estás en un estímulo alto para tu nivel actual. Completá una sesión y reevaluamos.'
+        };
+      }
+    } else if (same) {
+      return {
+        plan: next,
+        changed: false,
+        message: 'No se pudo suavizar más sin salir del rango seguro. Si duele, registrá recuperación.'
+      };
+    } else {
+      openRun.structure = neo;
+    }
+    openRun.changeSummary = compareStructures(prev, openRun.structure);
+    openRun.justification = direction === 'harder'
+      ? 'Recalibración pedida por vos: un poco más exigente.'
+      : 'Recalibración pedida por vos: un poco más suave.';
+    openRun.decisionAction = direction === 'harder' ? 'progress_continuous' : 'reduce';
+    openRun.title = `Sesión · ${describeStructure(openRun.structure)}`;
+    const m = metrics(openRun.structure);
+    openRun.prescribedContinuousSec = m.continuousSec;
+    openRun.prescribedTotalRunSec = m.totalRunSec;
+    openRun.estimatedDurationMin = m.totalMin;
+    openRun.estimatedKm = estimateKm(openRun.structure, settings);
+    // Regenerar horizonte posterior a esta sesión para no dejar colgados estímulos viejos
+    const order = Number(openRun.order) || 0;
+    next.sessions = (next.sessions || []).filter(s => {
+      if (s.id === openRun.id) return true;
+      if (!(s.status === 'pending' || s.status === 'rescheduled')) return true;
+      return Number(s.order) <= order;
+    });
+    const refreshed = ensureHorizon(next, logs, settings, {
+      action: 'consolidate',
+      reason: 'Tras recalibración manual, consolidamos el horizonte.'
+    });
+    refreshed.lastRecalibration = {
+      at: localDateISO(),
+      direction,
+      from: describeStructure(prev),
+      to: describeStructure(openRun.structure)
+    };
+    return {
+      plan: refreshed,
+      changed: true,
+      previous: describeStructure(prev),
+      next: describeStructure(openRun.structure),
+      message: direction === 'harder'
+        ? `Subimos un poco: ${describeStructure(openRun.structure)}.`
+        : `Bajamos un poco: ${describeStructure(openRun.structure)}.`
+    };
   }
 
   function hasSafetyOverride(log) {
@@ -759,6 +1010,12 @@
         walkSeconds: asContinuous ? 0 : (profile.demonstratedContinuousSec >= 5 * 60 ? 60 : params.defaultWalkSeconds),
         reps: asContinuous ? 1 : (profile.demonstratedContinuousSec >= 5 * 60 ? 1 : 6)
       });
+    }
+    if (profile?.stage === 1 && !fallback) {
+      return startingStructureForAbility('none', { conservative: true });
+    }
+    if (profile?.intakeAbility && !fallback) {
+      return startingStructureForAbility(profile.intakeAbility, { conservative: false });
     }
     return structureFromClassic(fallback || profile?.baselineStructure);
   }
@@ -1220,6 +1477,10 @@
     next.version = Math.max(4, Number(next.version) || 4);
     next.engineVersion = ENGINE_VERSION;
     next.params = { ...DEFAULT_PARAMS, ...(next.params || {}) };
+    if (next.onboardingCompleted == null) {
+      // Planes previos con sesiones se consideran onboarded; vacíos nuevos no.
+      next.onboardingCompleted = next.sessions.some(s => s.kind === 'run');
+    }
     if (!already) {
       next.goal = next.goal || {
         type: '5k_finish_runwalk',
@@ -1240,6 +1501,9 @@
       return s;
     });
     next.athleteProfile = deriveProfile(logs, next, settings);
+    if (!next.onboardingCompleted && next.sessions.length === 0) {
+      return next;
+    }
     return ensureHorizon(next, logs, settings, already
       ? null
       : { action: 'consolidate', reason: 'Migración adaptativa: continuidad del plan.' });
@@ -1405,6 +1669,8 @@
     ENGINE_VERSION,
     DEFAULT_PARAMS,
     ACTION_LABELS,
+    GOAL_CATALOG,
+    CONTINUOUS_ABILITY,
     setClock,
     now,
     localDateISO,
@@ -1430,6 +1696,11 @@
     makeRunItem,
     makeRestItem,
     structureForProfile,
+    startingStructureForAbility,
+    normalizeIntake,
+    buildPlanFromIntake,
+    recalibrateLoad,
+    stageFromContinuousSec,
     validTrainingLogs,
     pendingRuns,
     openItems,

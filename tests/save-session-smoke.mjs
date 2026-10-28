@@ -69,9 +69,30 @@ async function fillCloseAndSave({ time = '38:00' } = {}) {
   await page.waitForTimeout(800);
 }
 
+async function completeOnboarding() {
+  const dialog = page.locator('#onboardingDialog');
+  await dialog.waitFor({ state: 'visible', timeout: 8000 });
+  // Step 1 goal already defaulted
+  await page.locator('#onboardNext').click();
+  await page.waitForTimeout(150);
+  // Step 2 ability
+  await page.locator('input[name="onboardAbility"][value="1min"]').check();
+  await page.locator('#onboardNext').click();
+  await page.waitForTimeout(150);
+  // Step 3 days/env
+  await page.locator('#onboardNext').click();
+  await page.waitForTimeout(150);
+  // Step 4 pain no + finish
+  await page.locator('input[name="onboardPain"][value="no"]').check();
+  await page.locator('#onboardFinish').click();
+  await page.waitForTimeout(500);
+  await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+}
+
 try {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
+  await completeOnboarding();
 
   // Case A: Registrar sesión hecha (manual del plan)
   const logBtn = page.locator('#logPlanSession');
@@ -95,6 +116,7 @@ try {
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(400);
+  await completeOnboarding();
 
   // Start workout briefly to get fromTimer path
   const startHome = page.locator('#startWorkoutHome');
