@@ -717,6 +717,7 @@
     $('#closeNext').hidden = step === 3;
     $('#saveSession').hidden = step !== 3;
     $('#sessionDialog').dataset.step = String(step);
+    if (step === 3) renderSessionMetricsPreview();
     // El cuerpo scrollea; el footer queda fijo. Volver arriba al cambiar de paso.
     const scroller = $('#sessionForm')?.querySelector('.modal-scroll');
     if (scroller) scroller.scrollTop = 0;
@@ -1455,6 +1456,7 @@
       ['Tipo', historyKind(s)],
       ['Duración', s.time || '—'],
       ['Distancia', typeof s.distanceKm === 'number' ? `${s.distanceKm.toFixed(2).replace('.', ',')} km` : '—'],
+      ...paceRowsForLog(s),
       ['Lugar', environmentLabel(env)],
       ['Máx. continuo', s.maxRunBlockSec != null ? Coach().formatBlock(s.maxRunBlockSec) : '—'],
       ['Esfuerzo', s.rpe != null ? `${s.rpe}/10` : '—'],
@@ -1653,6 +1655,100 @@
     return Number(t) || 0;
   }
 
+  /** Máscara de tiempo: solo dígitos → MM:SS o H:MM:SS (no hace falta tipear ':'). */
+  function maskTimeDigits(raw) {
+    const digits = String(raw || '').replace(/\D/g, '').slice(0, 6);
+    if (!digits) return '';
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) {
+      return `${digits.slice(0, digits.length - 2)}:${digits.slice(-2)}`;
+    }
+    return `${digits.slice(0, digits.length - 4)}:${digits.slice(-4, -2)}:${digits.slice(-2)}`;
+  }
+
+  function normalizeTimeField(value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return '';
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) return trimmed;
+    return maskTimeDigits(trimmed);
+  }
+
+  function structureForSessionId(planSessionId) {
+    if (planSessionId && plan?.sessions) {
+      const hit = plan.sessions.find(s => s.id === planSessionId && s.kind === 'run');
+      if (hit?.structure) return hit.structure;
+    }
+    return focusStructure();
+  }
+
+  function computePaceFromForm() {
+    if (!window.PaceAdaptive?.computeSessionPaceMetrics) return null;
+    const elapsedSec = timeToSec($('#sessionTime')?.value);
+    const distanceKm = parseOptionalNumber($('#sessionDistance')?.value);
+    const planId = $('#sessionPlanId')?.value || activePlanSessionId || null;
+    const external = $('#sessionExternal')?.value === '1';
+    const structure = external ? null : structureForSessionId(planId);
+    return window.PaceAdaptive.computeSessionPaceMetrics({
+      elapsedSec,
+      distanceKm,
+      structure,
+      speeds: settings
+    });
+  }
+
+  function formatSpeedKmh(kmh) {
+    if (!Number.isFinite(kmh) || kmh <= 0) return '—';
+    return `${String(kmh).replace('.', ',')} km/h`;
+  }
+
+  function renderSessionMetricsPreview() {
+    const box = $('#sessionMetricsPreview');
+    const body = $('#sessionMetricsPreviewBody');
+    const note = $('#sessionMetricsPreviewNote');
+    if (!box || !body) return;
+    const metrics = computePaceFromForm();
+    if (!metrics || (!metrics.cyclePaceLabel && !metrics.overallPaceLabel)) {
+      box.hidden = true;
+      body.innerHTML = '';
+      if (note) note.textContent = '';
+      return;
+    }
+    box.hidden = false;
+    const cycleLabel = metrics.cyclePaceLabel || metrics.overallPaceLabel || '—';
+    const runLabel = metrics.isContinuous
+      ? (metrics.runPaceLabel || cycleLabel)
+      : (metrics.runPaceLabel || '—');
+    const cycleSpeed = formatSpeedKmh(metrics.cycleSpeedKmh || metrics.overallSpeedKmh);
+    const runSpeed = formatSpeedKmh(metrics.runSpeedKmh);
+    body.innerHTML = `
+      <div><span>Ritmo del ciclo</span><strong>${escapeHtml(cycleLabel)}</strong></div>
+      <div><span>${metrics.isContinuous ? 'Velocidad media' : 'Ritmo solo carrera'}</span><strong>${escapeHtml(metrics.isContinuous ? cycleSpeed : runLabel)}</strong></div>
+      <div><span>Km del ciclo</span><strong>${escapeHtml(String(metrics.cycleKm).replace('.', ','))} km</strong></div>
+      <div><span>${metrics.isContinuous ? 'Ritmo global' : 'Vel. carrera'}</span><strong>${escapeHtml(metrics.isContinuous ? cycleLabel : runSpeed)}</strong></div>
+    `;
+    if (note) {
+      note.textContent = metrics.distanceSource === 'attributed'
+        ? 'Distancia repartida por tiempo×velocidad de cada bloque. El ciclo excluye calentamiento y enfriamiento.'
+        : metrics.distanceSource === 'estimated'
+          ? 'Sin distancia confirmada: ritmos estimados con tus velocidades de ajustes.'
+          : 'Ritmo sobre el tiempo/distancia totales (sin estructura de bloques).';
+    }
+  }
+
+  function paceRowsForLog(log) {
+    const m = log?.paceMetrics;
+    if (!m) return [];
+    const rows = [];
+    if (m.cyclePaceLabel) {
+      rows.push(['Ritmo ciclo (sin warm/cool)', `${m.cyclePaceLabel}${m.cycleSpeedKmh ? ` · ${formatSpeedKmh(m.cycleSpeedKmh)}` : ''}`]);
+    }
+    if (m.runPaceLabel && !m.isContinuous) {
+      rows.push(['Ritmo solo carrera', `${m.runPaceLabel}${m.runSpeedKmh ? ` · ${formatSpeedKmh(m.runSpeedKmh)}` : ''}`]);
+    }
+    if (m.cycleKm != null) rows.push(['Distancia del ciclo', `${String(m.cycleKm).replace('.', ',')} km`]);
+    return rows;
+  }
+
   let saveInFlight = false;
 
   async function saveSessionFromForm(e) {
@@ -1725,14 +1821,27 @@
       const environment = typeValue === 'Cinta' ? 'treadmill'
         : typeValue === 'Exterior' ? 'outdoor'
         : (sessionEnvironment || settings.lastEnvironment || null);
+      const timeRaw = normalizeTimeField($('#sessionTime').value);
+      $('#sessionTime').value = timeRaw;
+      const elapsedSec = timeToSec(timeRaw);
+      const distanceKm = parseOptionalNumber($('#sessionDistance').value);
+      const planSessionId = external ? null : ($('#sessionPlanId').value || activePlanSessionId || null);
+      const structure = external ? null : structureForSessionId(planSessionId);
+      const paceMetrics = window.PaceAdaptive?.computeSessionPaceMetrics({
+        elapsedSec,
+        distanceKm,
+        structure,
+        speeds: settings
+      }) || null;
       const log = {
         id,
         date,
         type: typeValue,
         environment,
-        planSessionId: external ? null : ($('#sessionPlanId').value || activePlanSessionId || null),
-        time: $('#sessionTime').value.trim() || null,
-        distanceKm: parseOptionalNumber($('#sessionDistance').value),
+        planSessionId,
+        time: timeRaw || null,
+        elapsedSec: elapsedSec || null,
+        distanceKm,
         distanceEstimated: $('#sessionDistanceEstimated').checked,
         maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
         couldContinue: selectedValue('couldContinue'),
@@ -1749,7 +1858,8 @@
         execution: prescriptionCompleted ? 'completed' : 'aborted',
         progression: null,
         notes: $('#sessionNotes').value.trim(),
-        source: external ? 'external' : (fromTimer ? 'timer' : 'manual')
+        source: external ? 'external' : (fromTimer ? 'timer' : 'manual'),
+        paceMetrics
       };
 
       logs.push(log);
@@ -1823,6 +1933,31 @@
       : '—';
     $('#adaptEffort').textContent = log.rpe != null ? `${log.rpe}/10` : '—';
     $('#adaptEffortNote').textContent = Number(log.rpe) >= 7 ? 'Muy exigente' : Number(log.rpe) <= 5 ? 'Cómodo' : 'Moderado';
+    const pace = log.paceMetrics;
+    const pacePanel = $('#adaptPacePanel');
+    if (pacePanel) {
+      if (pace && (pace.cyclePaceLabel || pace.overallPaceLabel)) {
+        pacePanel.hidden = false;
+        $('#adaptCyclePace').textContent = pace.cyclePaceLabel || pace.overallPaceLabel || '—';
+        $('#adaptCyclePaceNote').textContent = pace.cycleKm != null
+          ? `${String(pace.cycleKm).replace('.', ',')} km de ciclo`
+          : 'sin warm/cool';
+        $('#adaptRunPace').textContent = pace.isContinuous
+          ? (pace.runPaceLabel || pace.cyclePaceLabel || '—')
+          : (pace.runPaceLabel || '—');
+        $('#adaptRunPaceNote').textContent = pace.isContinuous
+          ? 'carrera continua'
+          : (pace.runKm != null ? `${String(pace.runKm).replace('.', ',')} km corriendo` : 'solo segmentos run');
+        $('#adaptCycleSpeed').textContent = formatSpeedKmh(pace.cycleSpeedKmh || pace.overallSpeedKmh);
+        $('#adaptPaceHint').textContent = pace.distanceSource === 'attributed'
+          ? 'Ecuación: km del ciclo = distancia × (tiempo×velocidad del ciclo) / Σ(bloques). Ritmo = tiempo del ciclo ÷ km del ciclo.'
+          : pace.distanceSource === 'estimated'
+            ? 'Ritmos estimados con tus velocidades de ajustes (sin distancia confirmada).'
+            : 'Ritmo global tiempo ÷ distancia (sin estructura de intervalos).';
+      } else {
+        pacePanel.hidden = true;
+      }
+    }
     $('#adaptPlace').textContent = `Realizado en: ${environmentLabel(log.environment)}`;
     const action = $('#adaptAction');
     action.className = `adapt-action ${adapt.cls}`;
@@ -2276,11 +2411,41 @@
       if ($('#finishDistance') && $('#sessionDistance').value) {
         $('#finishDistance').textContent = formatKm(Number($('#sessionDistance').value));
       }
+      renderSessionMetricsPreview();
       showToast('Distancia marcada como confirmada');
     });
     $('#sessionDistance').addEventListener('input', () => {
       // Editar no confirma sola: hay que pulsar confirmar (evita “confirmar” sin querer).
+      renderSessionMetricsPreview();
     });
+    const sessionTimeEl = $('#sessionTime');
+    if (sessionTimeEl) {
+      sessionTimeEl.addEventListener('input', () => {
+        const el = sessionTimeEl;
+        const start = el.selectionStart;
+        const before = el.value;
+        const masked = maskTimeDigits(before);
+        if (masked !== before) {
+          el.value = masked;
+          // Cursor al final tras reformatear (móvil / teclado numérico).
+          const pos = masked.length;
+          try { el.setSelectionRange(pos, pos); } catch { /* */ }
+        } else if (start != null) {
+          try { el.setSelectionRange(start, start); } catch { /* */ }
+        }
+        renderSessionMetricsPreview();
+      });
+      sessionTimeEl.addEventListener('blur', () => {
+        sessionTimeEl.value = normalizeTimeField(sessionTimeEl.value);
+        renderSessionMetricsPreview();
+      });
+      sessionTimeEl.addEventListener('paste', (ev) => {
+        ev.preventDefault();
+        const text = (ev.clipboardData || window.clipboardData)?.getData('text') || '';
+        sessionTimeEl.value = normalizeTimeField(text);
+        renderSessionMetricsPreview();
+      });
+    }
 
     $('#mainTimerButton').addEventListener('click', () => startTimer());
     $('#nextBlockButton').addEventListener('click', nextBlock);
