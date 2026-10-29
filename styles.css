@@ -714,6 +714,44 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
 #onboardingDialog .choice-row label { font-size: 14px; }
 #todayOnboarding { padding: 12px 0 24px; }
 
+.milestone-box, .guide-card, .week-calendar {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+.guide-card .quiet-button { width: auto; justify-self: start; }
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.week-day {
+  display: grid;
+  gap: 4px;
+  padding: 8px 4px;
+  border-radius: 12px;
+  text-align: center;
+  background: rgba(255,255,255,.03);
+  min-height: 64px;
+}
+.week-day.is-today { outline: 1px solid var(--accent); }
+.week-day strong { font-size: 14px; }
+.week-day span { font-size: 10px; color: var(--muted); line-height: 1.2; }
+.week-day .dot-run { color: var(--run, #6ee7a8); }
+.week-day .dot-rest { color: var(--warm); }
+.week-day .dot-test { color: #7dd3fc; }
+.help-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.legal-copy { display: grid; gap: 10px; color: var(--muted); line-height: 1.45; }
+#importActivityJson, #accountDisplayName {
+  width: 100%; text-align: left; min-height: 44px; font-size: 15px;
+}
+#preferredSurfaceSelect { width: min(200px, 52vw); min-height: 40px; }
+.history-item .history-edit-hint { color: var(--muted); font-size: 11px; }
+
 @media (max-width: 420px) {
   .close-data-grid { grid-template-columns: 1fr; }
   .metrics-preview-grid { grid-template-columns: 1fr; }

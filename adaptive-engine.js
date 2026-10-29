@@ -4,7 +4,7 @@
  * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.2.0';
+  const ENGINE_VERSION = '4.3.0';
 
   /** Catálogo de objetivos de producto (intake + ajustes). */
   const GOAL_CATALOG = {
@@ -43,6 +43,9 @@
     minGoodSessionsForProgress: 2,
     pauseDaysForReassess: 10,
     horizonPendingRuns: 2,
+    controlTestEveryCompletedRuns: 6,
+    controlTestSec: 12 * 60,
+    paceSuggestMinSamples: 2,
     warmSeconds: 300,
     coolSeconds: 300,
     defaultWalkSeconds: 120,
@@ -1295,6 +1298,7 @@
       attempts: [],
       engineVersion: ENGINE_VERSION,
       generated: true,
+      isControlTest: Boolean(meta.isControlTest),
       sessionGoal: meta.sessionGoal || 'Desarrollar tolerancia',
       secondaryGoals: meta.secondaryGoals || [],
       justification: meta.justification || '',
@@ -1306,6 +1310,44 @@
       estimatedDurationMin: m.totalMin,
       estimatedKm: meta.estimatedKm != null ? meta.estimatedKm : null
     };
+  }
+
+  function makeControlTestItem(plan, settings = {}) {
+    const params = paramsOf(plan);
+    const sec = Number(params.controlTestSec) || 12 * 60;
+    const st = structureFromClassic({
+      warmSeconds: params.warmSeconds,
+      coolSeconds: params.coolSeconds,
+      runSeconds: sec,
+      walkSeconds: 0,
+      reps: 1
+    });
+    return makeRunItem(plan, st, {
+      title: `Test de control · ${formatBlockSec(sec)} continuo`,
+      isControlTest: true,
+      action: 'consolidate',
+      sessionGoal: 'Medir progreso objetivo (test de control)',
+      justification: 'Cada varias sesiones hacemos un test corto para ver evolución real, no solo sensación.',
+      primaryDimension: 'performance',
+      estimatedKm: estimateKm(st, settings)
+    });
+  }
+
+  function shouldScheduleControlTest(plan, logs) {
+    const params = paramsOf(plan);
+    const every = Number(params.controlTestEveryCompletedRuns) || 6;
+    const completedRuns = (plan.sessions || []).filter(s => s.kind === 'run' && s.status === 'completed');
+    if (completedRuns.length < every) return false;
+    const sinceLastTest = completedRuns
+      .slice()
+      .reverse()
+      .findIndex(s => s.isControlTest);
+    const gap = sinceLastTest === -1 ? completedRuns.length : sinceLastTest;
+    if (gap < every) return false;
+    const pendingTest = (plan.sessions || []).some(s =>
+      s.isControlTest && (s.status === 'pending' || s.status === 'rescheduled')
+    );
+    return !pendingTest;
   }
 
   function lastCompletedRunStructure(plan) {
@@ -1352,16 +1394,6 @@
     let guard = 0;
     while (pendingRuns(plan).length < params.horizonPendingRuns && guard < 8) {
       guard += 1;
-      const base = lastCompletedRunStructure(plan)
-        || pendingRuns(plan)[0]?.structure
-        || profile.baselineStructure;
-      const action = decision?.action
-        || (profile.needsReassess ? 'reassess' : 'consolidate');
-      const effectiveAction = action === 'repeat' ? 'consolidate' : action;
-      const genAction = effectiveAction === 'recovery' ? 'consolidate' : effectiveAction;
-      const candidates = generateCandidates(base, genAction, profile, plan);
-      const picked = pickCandidate(candidates, genAction);
-      const diff = compareStructures(base, picked.structure);
       const speeds = {
         walkSpeed: settings?.walkSpeed,
         runSpeed: settings?.runSpeed,
@@ -1373,6 +1405,23 @@
       if (profile.stage <= 5 && lastAny?.kind === 'run') {
         plan.sessions.push(makeRestItem(plan, 'Recuperación entre estímulos (NHS C25K / Galloway).'));
       }
+
+      if (shouldScheduleControlTest(plan, logs) && profile.stage >= 3) {
+        plan.sessions.push(makeControlTestItem(plan, speeds));
+        decision = { action: 'consolidate', reason: 'Tras test de control, consolidamos.' };
+        continue;
+      }
+
+      const base = lastCompletedRunStructure(plan)
+        || pendingRuns(plan)[0]?.structure
+        || profile.baselineStructure;
+      const action = decision?.action
+        || (profile.needsReassess ? 'reassess' : 'consolidate');
+      const effectiveAction = action === 'repeat' ? 'consolidate' : action;
+      const genAction = effectiveAction === 'recovery' ? 'consolidate' : effectiveAction;
+      const candidates = generateCandidates(base, genAction, profile, plan);
+      const picked = pickCandidate(candidates, genAction);
+      const diff = compareStructures(base, picked.structure);
 
       plan.sessions.push(makeRunItem(plan, picked.structure, {
         action: effectiveAction,
@@ -1394,7 +1443,7 @@
 
   /**
    * Sugerencia de velocidad: nunca aplica sola.
-   * No estima ritmo de carrera desde distancia total de sesión mixta.
+   * Prefiere ritmo de carrera / ciclo persistido en logs (paceMetrics).
    */
   function suggestSpeed(logs, settings = {}, plan = null) {
     const params = paramsOf(plan);
@@ -1434,7 +1483,6 @@
       };
     }
 
-    // Solo sugerir si hay distancias confirmadas en sesiones ya continuas (walk=0 prescrito no siempre disponible en log)
     const continuousSessions = comparable.filter(l => Number(l.maxRunBlockSec) >= 15 * 60);
     if (continuousSessions.length < 2) {
       return {
@@ -1444,16 +1492,47 @@
       };
     }
 
+    // Evidencia objetiva: ritmo de carrera del ciclo (sin warm/cool) cuando está persistido.
+    const withPace = continuousSessions.filter(l => {
+      const kmh = Number(l.paceMetrics?.runSpeedKmh || l.paceMetrics?.cycleSpeedKmh);
+      return Number.isFinite(kmh) && kmh > 0 && l.paceMetrics?.distanceSource === 'attributed';
+    });
+    const minPaceSamples = Number(params.paceSuggestMinSamples) || 2;
+    if (withPace.length >= minPaceSamples) {
+      const avg = withPace.reduce((s, l) => s + Number(l.paceMetrics.runSpeedKmh || l.paceMetrics.cycleSpeedKmh), 0) / withPace.length;
+      const deltaCap = Number(params.speedSuggestMaxDeltaKmh) || 0.5;
+      if (avg >= current + 0.25) {
+        const suggested = Math.round(Math.min(avg, current + deltaCap) * 10) / 10;
+        if (suggested > current) {
+          return {
+            currentKmh: current,
+            suggestedKmh: suggested,
+            action: 'suggest_up',
+            acceptRequired: true,
+            message: `Tu ritmo de carrera en las últimas sesiones (~${String(avg.toFixed(1)).replace('.', ',')} km/h) sugiere probar ${String(suggested).replace('.', ',')} km/h. ¿Querés intentarlo?`,
+            reasonCode: ['SPEED_SUGGEST_FROM_CYCLE_PACE'],
+            evidenceSessions: withPace.length,
+            evidenceAvgKmh: Math.round(avg * 10) / 10
+          };
+        }
+      }
+      return {
+        ...base,
+        message: `Tu ritmo de ciclo/carrera está alineado con ${String(current).replace('.', ',')} km/h. Lo mantenemos.`,
+        reasonCode: ['SPEED_KEEP_PACE_ALIGNED'],
+        evidenceSessions: withPace.length
+      };
+    }
+
     const confirmed = continuousSessions.filter(l =>
       typeof l.distanceKm === 'number' &&
       l.distanceEstimated === false &&
       typeof l.elapsedSec === 'number' && l.elapsedSec > 0
     );
-    // Sin segmentos separados no inventamos ritmo de carrera desde distancia mixta
     if (confirmed.length < 2) {
       return {
         ...base,
-        message: `Tus últimas sesiones fueron cómodas, pero aún no hay datos de segmentos confiables para ajustar el ritmo. ¿Querés mantener ${String(current).replace('.', ',')} km/h?`,
+        message: `Tus últimas sesiones fueron cómodas, pero aún no hay ritmos de ciclo confirmados para ajustar. ¿Querés mantener ${String(current).replace('.', ',')} km/h?`,
         reasonCode: ['SPEED_NO_SEGMENT_DATA']
       };
     }
@@ -1695,6 +1774,8 @@
     suggestSpeed,
     makeRunItem,
     makeRestItem,
+    makeControlTestItem,
+    shouldScheduleControlTest,
     structureForProfile,
     startingStructureForAbility,
     normalizeIntake,

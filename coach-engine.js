@@ -347,6 +347,33 @@
     localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
   }
 
+  /** Corrige un log ya guardado (no reescribe la progresión del plan). */
+  function updateStoredLog(logs, logId, patch = {}) {
+    const next = clone(logs || []);
+    const idx = next.findIndex(l => l.id === logId);
+    if (idx < 0) return { logs: next, updated: null, ok: false };
+    const prev = next[idx];
+    const allowed = [
+      'time', 'elapsedSec', 'distanceKm', 'distanceEstimated', 'rpe', 'pain',
+      'painLocation', 'painIntensity', 'notes', 'couldContinue', 'maxRunBlockSec',
+      'type', 'environment', 'paceMetrics'
+    ];
+    const cleaned = {};
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) cleaned[key] = patch[key];
+    }
+    next[idx] = {
+      ...prev,
+      ...cleaned,
+      id: prev.id,
+      planSessionId: prev.planSessionId,
+      date: prev.date,
+      editedAt: window.PaceAdaptive ? window.PaceAdaptive.localDateISO() : new Date().toISOString().slice(0, 10)
+    };
+    saveLogs(next);
+    return { logs: next, updated: next[idx], ok: true };
+  }
+
   function loadPlan() {
     let plan = null;
     try {
@@ -1403,6 +1430,7 @@
     savePlan,
     loadLogs,
     saveLogs,
+    updateStoredLog,
     getFocusSession,
     getUnderlyingPlanItem,
     sortedPlanSessions,

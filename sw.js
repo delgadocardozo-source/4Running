@@ -1,4 +1,4 @@
-const CACHE = 'pace01-v2.2.0';
+const CACHE = 'pace01-v2.3.0';
 const ASSETS = [
   './',
   './index.html',
@@ -6,6 +6,7 @@ const ASSETS = [
   './app.js',
   './adaptive-engine.js',
   './coach-engine.js',
+  './product.js',
   './manifest.webmanifest',
   './hero-runner.jpg',
   './icon.svg',

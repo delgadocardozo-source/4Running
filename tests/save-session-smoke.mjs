@@ -69,7 +69,18 @@ async function fillCloseAndSave({ time = '38:00' } = {}) {
   await page.waitForTimeout(800);
 }
 
+async function acceptLegalIfNeeded() {
+  const legal = page.locator('#legalDialog');
+  const visible = await legal.evaluate(el => el.open).catch(() => false);
+  if (!visible) return;
+  await page.locator('#legalPrivacyCheck').check();
+  await page.locator('#legalMedicalCheck').check();
+  await page.locator('#legalAcceptBtn').click();
+  await page.waitForTimeout(300);
+}
+
 async function completeOnboarding() {
+  await acceptLegalIfNeeded();
   const dialog = page.locator('#onboardingDialog');
   await dialog.waitFor({ state: 'visible', timeout: 8000 });
   // Step 1 goal already defaulted
