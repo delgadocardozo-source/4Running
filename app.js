@@ -1721,7 +1721,35 @@
     showToast(out.message || (out.changed ? 'Ajuste deshecho' : 'Sin cambios'));
   }
 
+  async function restoreNextSessionFromProfile() {
+    if (!window.PaceAdaptive?.restoreFocusSession) {
+      showToast('Restablecer no disponible.');
+      return;
+    }
+    const preview = window.PaceAdaptive.restoreFocusSession(plan, logs, settings);
+    const ok = await askConfirm({
+      title: '¿Restablecer la próxima sesión?',
+      body: preview.changed
+        ? `Volvemos al nivel de tu plan / onboarding.\n\nAhora: ${preview.previous}\nQuedaría: ${preview.next}`
+        : (preview.message || 'La sesión ya está en un nivel razonable.'),
+      ok: preview.changed ? 'Restablecer' : 'Ok',
+      cancel: preview.changed ? 'Cancelar' : null
+    });
+    if (!ok || !preview.changed) return;
+    const out = Coach().restoreFocusFromProfile(plan, logs, settings);
+    plan = out.plan;
+    Coach().savePlan(plan);
+    reloadWorkoutFromPlan();
+    renderHome();
+    renderSettings();
+    showToast(out.message || 'Sesión restablecida');
+    window.PaceProduct?.track?.('session_restored', { changed: Boolean(out.changed) });
+  }
+
   function renderHome() {
+    if (!Coach().needsOnboarding(plan) && Coach().refreshStaleFocusDates) {
+      plan = Coach().refreshStaleFocusDates(plan) || plan;
+    }
     const needsIntro = Coach().needsOnboarding(plan);
     const readiness = Coach().assessRaceReadiness(logs, plan);
     const focus = needsIntro ? null : Coach().getFocusSession(plan);
@@ -1750,7 +1778,7 @@
     if (isRun && underlying?.status === 'rescheduled' && underlying.scheduledDate) {
       scheduleNote.hidden = false;
       scheduleNote.textContent = `Reprogramada para ${formatFriendlyDate(underlying.scheduledDate) || underlying.scheduledDate}. Es la misma sesión.`;
-    } else if (focus?.scheduledDate) {
+    } else if (focus?.scheduledDate && focus.scheduledDate > todayIso) {
       scheduleNote.hidden = false;
       scheduleNote.textContent = focus.kind === 'rest'
         ? `Recuperación programada: ${formatFriendlyDate(focus.scheduledDate) || focus.scheduledDate}.`
@@ -2747,6 +2775,7 @@
     $('#recalibrateEasier')?.addEventListener('click', () => applyRecalibration('easier'));
     $('#recalibrateHarder')?.addEventListener('click', () => applyRecalibration('harder'));
     $('#undoRecalibrate')?.addEventListener('click', () => undoLastRecalibration());
+    $('#restoreNextSession')?.addEventListener('click', () => restoreNextSessionFromProfile());
     $('#redoOnboarding')?.addEventListener('click', async () => {
       const ok = await askConfirm({
         title: '¿Rehacer el onboarding?',

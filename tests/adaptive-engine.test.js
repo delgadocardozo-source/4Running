@@ -449,6 +449,22 @@ console.log('\n=== Onboarding / intake → estructura inicial ===');
   assert(undone.next === harder.previous, 'deshacer vuelve a la estructura anterior');
   const easier = A.recalibrateLoad(harder.plan, [], { runSpeed: 7.5 }, 'easier');
   assert(easier.changed || easier.message, 'recalibrar más fácil responde');
+
+  // Plan aplastado: 4×30s no puede bajar más; restablecer vuelve al nivel de intake.
+  const crushed = JSON.parse(JSON.stringify(beginner));
+  const crushedRun = crushed.sessions.find(s => s.kind === 'run' && s.status === 'pending');
+  crushedRun.structure = { warmSeconds: 300, coolSeconds: 300, runSeconds: 30, walkSeconds: 30, reps: 4 };
+  crushedRun.scheduledDate = '2026-04-28';
+  crushedRun.title = 'Sesión · 0:30 correr / 0:30 caminar ×4';
+  const noMore = A.recalibrateLoad(crushed, [], { runSpeed: 7.5 }, 'easier');
+  assert(!noMore.changed, 'piso seguro: no baja más de 4×30s');
+  const restored = A.restoreFocusSession(crushed, [], { runSpeed: 7.5 });
+  assert(restored.changed, 'restablecer cambia la sesión aplastada');
+  const openRestored = restored.plan.sessions.find(s => s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled'));
+  assert(openRestored.structure.runSeconds >= 45, `restablecer sube continuo (got ${openRestored.structure.runSeconds})`);
+  assert(openRestored.scheduledDate !== '2026-04-28', 'restablecer corrige fecha vieja de abril');
+  assert(openRestored.structure.walkSeconds === 0 || openRestored.structure.walkSeconds >= 60,
+    'restablecer no deja caminata de 30s');
 }
 
 console.log('\n=== Ritmo de ciclo (sin warm/cool) ===');
