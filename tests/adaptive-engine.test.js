@@ -343,6 +343,62 @@ const reportPath = path.join(root, 'tests/simulation-14d-report.json');
 fs.writeFileSync(reportPath, JSON.stringify({ A: Ares.rows, B: Bres.rows, C: Cres.rows, D: Dres.rows, F: Fres.rows }, null, 2));
 console.log('\nReporte escrito en', reportPath);
 
+console.log('\n=== Ritmo de ciclo → sugerencia de velocidad ===');
+{
+  const plan = A.buildPlanFromIntake({
+    goalType: '5k_pb',
+    continuousAbility: '30min',
+    sessionsPerWeek: 3
+  }, { runSpeed: 7.5 });
+  const paceLogs = [0, 1, 2].map(i => ({
+    id: `p${i}`,
+    date: `2026-09-0${i + 1}`,
+    type: 'Cinta',
+    rpe: 3,
+    pain: false,
+    prescriptionCompleted: true,
+    execution: 'completed',
+    maxRunBlockSec: 25 * 60,
+    distanceKm: 4.2,
+    distanceEstimated: false,
+    elapsedSec: 25 * 60,
+    paceMetrics: {
+      runSpeedKmh: 8.2,
+      cycleSpeedKmh: 8.0,
+      distanceSource: 'attributed',
+      runPaceLabel: '7:19/km'
+    }
+  }));
+  const sug = A.suggestSpeed(paceLogs, { runSpeed: 7.5 }, plan);
+  assert(sug.action === 'suggest_up', 'paceMetrics atribuido puede sugerir subir');
+  assert(sug.reasonCode.includes('SPEED_SUGGEST_FROM_CYCLE_PACE'), 'usa ritmo de ciclo');
+}
+
+console.log('\n=== Test de control en horizonte ===');
+{
+  const plan = A.buildPlanFromIntake({
+    continuousAbility: '15min',
+    goalType: '5k_finish_runwalk',
+    sessionsPerWeek: 3
+  }, { runSpeed: 7.5 });
+  // Simular 6 corridas completadas
+  for (let i = 0; i < 6; i += 1) {
+    plan.sessions.push({
+      id: `done-${i}`,
+      order: 100 + i,
+      kind: 'run',
+      status: 'completed',
+      structure: { warmSeconds: 300, coolSeconds: 300, runSeconds: 12 * 60, walkSeconds: 0, reps: 1 },
+      attempts: []
+    });
+  }
+  // quitar pendientes viejos del intake para forzar regeneración
+  plan.sessions = plan.sessions.filter(s => s.status === 'completed');
+  const next = A.ensureHorizon(plan, [], { runSpeed: 7.5 }, { action: 'consolidate' });
+  assert(next.sessions.some(s => s.isControlTest && (s.status === 'pending' || s.status === 'rescheduled')),
+    'programa test de control tras varias sesiones');
+}
+
 console.log('\n=== Onboarding / intake → estructura inicial ===');
 {
   const beginner = A.buildPlanFromIntake({

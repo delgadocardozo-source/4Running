@@ -139,11 +139,26 @@
           <p class="goal-explain" id="confidenceExplain" hidden></p>
           <p class="goal-explain caution" id="cautionExplain" hidden></p>
           <p class="goal-check">Checkpoint <strong id="checkpointLabel">25 oct</strong> <span id="checkpointCountdown"></span></p>
+          <div class="milestone-box" id="milestoneBox" hidden>
+            <p class="metric-label">Hitos</p>
+            <p id="milestoneLines"></p>
+          </div>
           <button class="text-button" id="goalDetailToggle" type="button">Detalle</button>
           <p class="evidence-need" id="evidenceNeed" hidden></p>
           <span class="sr-only" id="readinessBadge"></span>
           <span class="sr-only" id="readinessTarget"></span>
           <p class="sr-only" id="readinessSummary"></p>
+        </section>
+
+        <aside class="guide-card" id="guideCard" hidden>
+          <p class="metric-label" id="guideTitle">Guía</p>
+          <p id="guideBody"></p>
+          <button type="button" class="quiet-button" id="guideDismiss">Entendido</button>
+        </aside>
+
+        <section class="week-calendar" id="weekCalendar" aria-label="Próximos 7 días" hidden>
+          <p class="metric-label">Esta semana</p>
+          <div class="week-grid" id="weekGrid"></div>
         </section>
 
         <div class="sequence-bar" id="sequenceBar" aria-label="Secuencia del plan"></div>
@@ -287,7 +302,28 @@
             <p class="setting-note" id="profileStageNote">Nivel: —</p>
           </div>
           <div class="settings-block">
-            <p class="metric-label">Velocidades</p>
+            <p class="metric-label">Cuenta en este dispositivo</p>
+            <label class="setting-row">
+              <span>Tu nombre<small>Opcional</small></span>
+              <input type="text" id="accountDisplayName" placeholder="Ej. Ana" maxlength="40">
+            </label>
+            <label class="setting-row">
+              <span>Superficie preferida<small>Cambia el lenguaje de ritmo</small></span>
+              <select id="preferredSurfaceSelect">
+                <option value="both">Calle y cinta</option>
+                <option value="outdoor">Solo aire libre</option>
+                <option value="treadmill">Solo cinta</option>
+              </select>
+            </label>
+            <label class="setting-row toggle-row">
+              <span>Recordatorio de entreno<small>Aviso al abrir si hoy toca</small></span>
+              <input type="checkbox" id="remindersToggle">
+            </label>
+            <button class="quiet-button" type="button" id="enableRemindersBtn">Activar notificaciones</button>
+            <p class="setting-note" id="accountIdNote">ID local: —</p>
+          </div>
+          <div class="settings-block" id="speedsSettingsBlock">
+            <p class="metric-label">Velocidades (cinta)</p>
             <label class="setting-row">
               <span>Velocidad al caminar<small>3–8 km/h</small></span>
               <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="walkSpeed" value="5.0" inputmode="decimal"><span>km/h</span></span>
@@ -300,6 +336,7 @@
               <span>Velocidad al enfriar<small>3–8 km/h</small></span>
               <span class="input-unit"><input type="number" step="0.1" min="3" max="8" id="coolSpeed" value="4.5" inputmode="decimal"><span>km/h</span></span>
             </label>
+            <p class="setting-note">En modo «solo aire libre» la home habla de ritmo conversacional en vez de km/h.</p>
           </div>
           <div class="settings-block">
             <p class="metric-label">Alertas</p>
@@ -323,11 +360,18 @@
             <button class="primary-button accent-button" type="submit">Guardar preferencias</button>
           </div>
           <div class="settings-block backup-block">
-            <p class="metric-label">Respaldo</p>
-            <p class="setting-note">Los datos quedan en este dispositivo. Exportá una copia antes de cambiar de teléfono o borrar el navegador.</p>
-            <button class="primary-button" type="button" id="exportHistory">Exportar mis datos</button>
-            <button class="quiet-button" type="button" id="restoreHistory">Restaurar desde archivo</button>
+            <p class="metric-label">Respaldo y sync</p>
+            <p class="setting-note">Sin cuenta en la nube todavía: el «paquete de sync» te permite pasar plan + historial a otro teléfono.</p>
+            <button class="primary-button" type="button" id="exportHistory">Exportar respaldo</button>
+            <button class="quiet-button" type="button" id="exportSyncPack">Exportar paquete de sync</button>
+            <button class="quiet-button" type="button" id="restoreHistory">Restaurar / importar sync</button>
             <input type="file" id="restoreFile" accept="application/json,.json" hidden>
+            <p class="setting-note" id="lastBackupNote">Último respaldo: nunca</p>
+          </div>
+          <div class="settings-block">
+            <p class="metric-label">Ayuda iPhone / PWA</p>
+            <ul class="help-list" id="iosHelpList"></ul>
+            <button class="quiet-button" type="button" id="showLegalBtn">Privacidad y disclaimer</button>
           </div>
           <div class="settings-block">
             <p class="metric-label">Cuenta / plan</p>
@@ -374,9 +418,8 @@
           </div>
         </div>
         <div class="step-dots" id="closeSteps" aria-hidden="true">
-          <span data-step-dot="1">Resultado</span>
-          <span data-step-dot="2">Molestia</span>
-          <span data-step-dot="3">Guardar</span>
+          <span data-step-dot="1">Cómo salió</span>
+          <span data-step-dot="2">Guardar</span>
         </div>
         <p class="close-context" id="closeContext" hidden>Actividad externa. No completa una sesión del plan.</p>
 
@@ -394,7 +437,7 @@
             <label><input type="radio" name="prescriptionDone" value="yes"> Sí</label>
             <label><input type="radio" name="prescriptionDone" value="no"> No</label>
           </div>
-          <p class="step-question">RPE</p>
+          <p class="step-question">Esfuerzo (RPE)</p>
           <div class="choice-row rpe-grid" id="rpeChoices">
             <label><input type="radio" name="sessionRpe" value="1"> 1</label>
             <label><input type="radio" name="sessionRpe" value="2"> 2</label>
@@ -412,10 +455,7 @@
             <label><input type="radio" name="sessionPain" value="no" id="painNo"> No</label>
             <label><input type="radio" name="sessionPain" value="yes" id="painYes"> Sí</label>
           </div>
-        </section>
-
-        <section data-close-step="2" hidden>
-          <div id="painDetails" class="pain-details">
+          <div id="painDetails" class="pain-details" hidden>
             <label>Ubicación<input type="text" id="sessionPainLocation" placeholder="Pantorrilla, rodilla, lumbar…"></label>
             <label>Intensidad (1–5)<input type="number" id="sessionPainIntensity" min="0" max="5" step="1" placeholder="2"></label>
             <fieldset class="choice-fieldset">
@@ -429,7 +469,7 @@
           </div>
         </section>
 
-        <section data-close-step="3" hidden>
+        <section data-close-step="2" hidden>
           <div class="close-metric" id="maxRunBlockDisplay">
             <span class="metric-label">Máx. continuo medido</span>
             <strong id="sessionMaxRunBlockLabel">—</strong>
@@ -670,8 +710,47 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <dialog id="legalDialog" class="modal">
+    <form method="dialog" class="modal-card" id="legalForm">
+      <p class="eyebrow">Antes de seguir</p>
+      <h2>Privacidad y salud</h2>
+      <div class="legal-copy">
+        <p>PACE/01 guarda tu plan e historial <strong>en este dispositivo</strong>. No hay cuenta en la nube todavía: si borrás el navegador, podés perder datos. Exportá respaldos desde Ajustes.</p>
+        <p>Esta app orienta entrenamientos de running con reglas conservadoras. <strong>No diagnostica ni reemplaza consejo médico</strong>. Con dolor fuerte, mareos o síntomas neurológicos, paramí y consultá a un profesional.</p>
+      </div>
+      <label class="check-row"><input type="checkbox" id="legalPrivacyCheck"> Entiendo el almacenamiento local y la privacidad</label>
+      <label class="check-row"><input type="checkbox" id="legalMedicalCheck"> Entiendo que no es consejo médico</label>
+      <div class="modal-actions">
+        <button class="primary-button accent-button" type="button" id="legalAcceptBtn">Continuar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="editLogDialog" class="modal">
+    <form class="modal-card" id="editLogForm" novalidate>
+      <div class="modal-heading">
+        <div>
+          <span class="eyebrow">Corregir</span>
+          <h2>Editar sesión</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
+      </div>
+      <p class="field-hint">Corrige tiempo, distancia o esfuerzo. No reescribe la decisión del plan ya aplicada.</p>
+      <input type="hidden" id="editLogId" value="">
+      <label>Tiempo<input type="text" id="editLogTime" inputmode="numeric" placeholder="38:12"></label>
+      <label>Distancia (km)<input type="number" id="editLogDistance" step="0.01" min="0" inputmode="decimal"></label>
+      <label>RPE<input type="number" id="editLogRpe" min="1" max="10" step="1"></label>
+      <label>Notas<input type="text" id="editLogNotes" placeholder="Opcional"></label>
+      <div class="modal-actions">
+        <button class="quiet-button" type="button" data-close-dialog>Cancelar</button>
+        <button class="primary-button accent-button" type="submit">Guardar cambios</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="adaptive-engine.js" defer></script>
   <script src="coach-engine.js" defer></script>
+  <script src="product.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>
