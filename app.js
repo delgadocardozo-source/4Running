@@ -1673,12 +1673,52 @@
   }
 
   async function applyRecalibration(direction) {
+    if (!window.PaceAdaptive?.recalibrateLoad) {
+      showToast('Ajuste no disponible.');
+      return;
+    }
+    // Vista previa sin guardar: solo la próxima sesión, sin tocar el resto del plan.
+    const preview = window.PaceAdaptive.recalibrateLoad(plan, logs, settings, direction);
+    if (!preview.changed) {
+      showToast(preview.message || 'Sin cambios');
+      return;
+    }
+    const ok = await askConfirm({
+      title: direction === 'harder' ? '¿Subir un poco la próxima sesión?' : '¿Bajar un poco la próxima sesión?',
+      body: `Solo cambia la próxima sesión pendiente.\n\nAhora: ${preview.previous}\nQuedaría: ${preview.next}\n\nEl resto del plan no se regenera. Podés deshacer después.`,
+      ok: 'Aplicar ajuste',
+      cancel: 'Cancelar'
+    });
+    if (!ok) return;
     const out = Coach().recalibrateFocus(plan, logs, settings, direction);
     plan = out.plan;
     Coach().savePlan(plan);
     reloadWorkoutFromPlan();
     renderHome();
-    showToast(out.message || (out.changed ? 'Plan recalibrado' : 'Sin cambios'));
+    renderSettings();
+    showToast(out.message || (out.changed ? 'Sesión ajustada' : 'Sin cambios'));
+    window.PaceProduct?.track?.('session_recalibrated', { direction, changed: Boolean(out.changed) });
+  }
+
+  async function undoLastRecalibration() {
+    if (!Coach().canUndoRecalibration?.(plan)) {
+      showToast('No hay un ajuste reciente para deshacer.');
+      return;
+    }
+    const ok = await askConfirm({
+      title: '¿Deshacer el último ajuste?',
+      body: 'Volvemos la próxima sesión a como estaba antes del ajuste fácil/difícil.',
+      ok: 'Deshacer',
+      cancel: 'Cancelar'
+    });
+    if (!ok) return;
+    const out = Coach().undoRecalibrateFocus(plan, settings);
+    plan = out.plan;
+    Coach().savePlan(plan);
+    reloadWorkoutFromPlan();
+    renderHome();
+    renderSettings();
+    showToast(out.message || (out.changed ? 'Ajuste deshecho' : 'Sin cambios'));
   }
 
   function renderHome() {
@@ -1705,7 +1745,6 @@
     $('#quietActions').hidden = needsIntro || !focus;
     $('#rescheduleSession').hidden = needsIntro || !focus;
     $('#skipSession').hidden = needsIntro || !focus;
-    if ($('#recalibrateRow')) $('#recalibrateRow').hidden = needsIntro || !isRun;
 
     const scheduleNote = $('#scheduleNote');
     if (isRun && underlying?.status === 'rescheduled' && underlying.scheduledDate) {
@@ -2328,6 +2367,23 @@
         ? `Nivel: ${profile.stageLabel} · confianza ${profile.confidence}`
         : 'Completá el onboarding para personalizar el plan.';
     }
+    const focusRun = !Coach().needsOnboarding(plan)
+      ? (plan?.sessions || []).find(s => s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled'))
+      : null;
+    if ($('#sessionFeelBlock')) {
+      $('#sessionFeelBlock').hidden = !plan?.onboardingCompleted;
+    }
+    if ($('#nextSessionStructureNote')) {
+      $('#nextSessionStructureNote').textContent = focusRun && window.PaceAdaptive
+        ? `Próxima: ${window.PaceAdaptive.describeStructure(focusRun.structure)}`
+        : 'No hay una sesión de carrera pendiente.';
+    }
+    if ($('#recalibrateEasier')) $('#recalibrateEasier').disabled = !focusRun;
+    if ($('#recalibrateHarder')) $('#recalibrateHarder').disabled = !focusRun;
+    if ($('#undoRecalibrate')) {
+      const canUndo = Boolean(focusRun && Coach().canUndoRecalibration?.(plan));
+      $('#undoRecalibrate').hidden = !canUndo;
+    }
     syncToggleButtons();
   }
 
@@ -2690,6 +2746,7 @@
     });
     $('#recalibrateEasier')?.addEventListener('click', () => applyRecalibration('easier'));
     $('#recalibrateHarder')?.addEventListener('click', () => applyRecalibration('harder'));
+    $('#undoRecalibrate')?.addEventListener('click', () => undoLastRecalibration());
     $('#redoOnboarding')?.addEventListener('click', async () => {
       const ok = await askConfirm({
         title: '¿Rehacer el onboarding?',

@@ -4,7 +4,7 @@
  * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.3.0';
+  const ENGINE_VERSION = '4.3.1';
 
   /** Catálogo de objetivos de producto (intake + ajustes). */
   const GOAL_CATALOG = {
@@ -616,6 +616,25 @@
    * Recalibración explícita del usuario sobre la próxima sesión pendiente.
    * direction: 'easier' | 'harder'
    */
+  function applyStructureToRun(openRun, structure, settings, prev, direction) {
+    openRun.structure = structureFromClassic(structure);
+    openRun.changeSummary = compareStructures(prev, openRun.structure);
+    openRun.justification = direction === 'harder'
+      ? 'Recalibración pedida por vos: un poco más exigente.'
+      : 'Recalibración pedida por vos: un poco más suave.';
+    openRun.decisionAction = direction === 'harder' ? 'progress_continuous' : 'reduce';
+    openRun.title = `Sesión · ${describeStructure(openRun.structure)}`;
+    const m = metrics(openRun.structure);
+    openRun.prescribedContinuousSec = m.continuousSec;
+    openRun.prescribedTotalRunSec = m.totalRunSec;
+    openRun.estimatedDurationMin = m.totalMin;
+    openRun.estimatedKm = estimateKm(openRun.structure, settings);
+  }
+
+  /**
+   * Ajusta SOLO la próxima sesión pendiente.
+   * No borra ni regenera el resto del horizonte (evita desconfigurar el plan entero).
+   */
   function recalibrateLoad(plan, logs = [], settings = {}, direction = 'easier') {
     const next = clone(plan || { sessions: [] });
     const openRun = (next.sessions || []).find(s =>
@@ -634,12 +653,12 @@
     const prev = structureFromClassic(openRun.structure);
     const neo = structureFromClassic(picked.structure);
     const same = describeStructure(prev) === describeStructure(neo);
+    let chosen = neo;
     if (same && direction === 'harder') {
-      // Si no hay progreso de continuo, intentar volumen
       const vol = generateCandidates(openRun.structure, 'progress_volume', profile, next);
       const pickVol = pickCandidate(vol, 'progress_volume');
       if (pickVol?.structure && describeStructure(pickVol.structure) !== describeStructure(prev)) {
-        openRun.structure = structureFromClassic(pickVol.structure);
+        chosen = structureFromClassic(pickVol.structure);
       } else {
         return {
           plan: next,
@@ -653,45 +672,65 @@
         changed: false,
         message: 'No se pudo suavizar más sin salir del rango seguro. Si duele, registrá recuperación.'
       };
-    } else {
-      openRun.structure = neo;
     }
-    openRun.changeSummary = compareStructures(prev, openRun.structure);
-    openRun.justification = direction === 'harder'
-      ? 'Recalibración pedida por vos: un poco más exigente.'
-      : 'Recalibración pedida por vos: un poco más suave.';
-    openRun.decisionAction = direction === 'harder' ? 'progress_continuous' : 'reduce';
-    openRun.title = `Sesión · ${describeStructure(openRun.structure)}`;
-    const m = metrics(openRun.structure);
-    openRun.prescribedContinuousSec = m.continuousSec;
-    openRun.prescribedTotalRunSec = m.totalRunSec;
-    openRun.estimatedDurationMin = m.totalMin;
-    openRun.estimatedKm = estimateKm(openRun.structure, settings);
-    // Regenerar horizonte posterior a esta sesión para no dejar colgados estímulos viejos
-    const order = Number(openRun.order) || 0;
-    next.sessions = (next.sessions || []).filter(s => {
-      if (s.id === openRun.id) return true;
-      if (!(s.status === 'pending' || s.status === 'rescheduled')) return true;
-      return Number(s.order) <= order;
-    });
-    const refreshed = ensureHorizon(next, logs, settings, {
-      action: 'consolidate',
-      reason: 'Tras recalibración manual, consolidamos el horizonte.'
-    });
-    refreshed.lastRecalibration = {
+    applyStructureToRun(openRun, chosen, settings, prev, direction);
+    next.lastRecalibration = {
       at: localDateISO(),
       direction,
+      sessionId: openRun.id,
+      previousStructure: clone(prev),
       from: describeStructure(prev),
-      to: describeStructure(openRun.structure)
+      to: describeStructure(openRun.structure),
+      undone: false
     };
     return {
-      plan: refreshed,
+      plan: next,
       changed: true,
       previous: describeStructure(prev),
       next: describeStructure(openRun.structure),
+      sessionId: openRun.id,
       message: direction === 'harder'
-        ? `Subimos un poco: ${describeStructure(openRun.structure)}.`
-        : `Bajamos un poco: ${describeStructure(openRun.structure)}.`
+        ? `Subimos un poco la próxima sesión: ${describeStructure(openRun.structure)}.`
+        : `Bajamos un poco la próxima sesión: ${describeStructure(openRun.structure)}.`
+    };
+  }
+
+  function undoRecalibration(plan, settings = {}) {
+    const next = clone(plan || { sessions: [] });
+    const snap = next.lastRecalibration;
+    if (!snap || snap.undone || !snap.previousStructure || !snap.sessionId) {
+      return { plan: next, changed: false, message: 'No hay un ajuste reciente para deshacer.' };
+    }
+    const openRun = (next.sessions || []).find(s => s.id === snap.sessionId);
+    if (!openRun || openRun.kind !== 'run') {
+      return { plan: next, changed: false, message: 'No encontramos la sesión ajustada.' };
+    }
+    if (!(openRun.status === 'pending' || openRun.status === 'rescheduled')) {
+      return { plan: next, changed: false, message: 'Esa sesión ya no está pendiente; no se puede deshacer.' };
+    }
+    const current = structureFromClassic(openRun.structure);
+    const restored = structureFromClassic(snap.previousStructure);
+    openRun.structure = restored;
+    openRun.changeSummary = compareStructures(current, restored);
+    openRun.justification = 'Deshiciste el ajuste manual; volviste a la sesión anterior.';
+    openRun.decisionAction = 'undo_recalibration';
+    openRun.title = `Sesión · ${describeStructure(restored)}`;
+    const m = metrics(restored);
+    openRun.prescribedContinuousSec = m.continuousSec;
+    openRun.prescribedTotalRunSec = m.totalRunSec;
+    openRun.estimatedDurationMin = m.totalMin;
+    openRun.estimatedKm = estimateKm(restored, settings);
+    next.lastRecalibration = {
+      ...snap,
+      undone: true,
+      undoneAt: localDateISO()
+    };
+    return {
+      plan: next,
+      changed: true,
+      previous: describeStructure(current),
+      next: describeStructure(restored),
+      message: `Volvimos a: ${describeStructure(restored)}.`
     };
   }
 
@@ -1781,6 +1820,7 @@
     normalizeIntake,
     buildPlanFromIntake,
     recalibrateLoad,
+    undoRecalibration,
     stageFromContinuousSec,
     validTrainingLogs,
     pendingRuns,
