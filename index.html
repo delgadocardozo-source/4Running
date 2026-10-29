@@ -80,13 +80,6 @@
           <button class="primary-button today-start" id="startWorkoutHome" type="button">Iniciar entrenamiento</button>
           <button class="quiet-button today-log-done" id="logPlanSession" type="button">Registrar sesión hecha</button>
           <button class="text-button today-preview" id="previewWorkout" type="button">Ver bloques</button>
-          <div class="recalibrate-row" id="recalibrateRow" hidden>
-            <p class="field-hint">¿Cómo se siente esta sesión prescrita?</p>
-            <div class="recalibrate-actions">
-              <button type="button" class="quiet-button" id="recalibrateEasier">Me queda difícil</button>
-              <button type="button" class="quiet-button" id="recalibrateHarder">Me queda fácil</button>
-            </div>
-          </div>
           <aside class="home-adapt" id="homeAdaptNote" hidden></aside>
         </div>
 
@@ -300,6 +293,16 @@
               </select>
             </label>
             <p class="setting-note" id="profileStageNote">Nivel: —</p>
+          </div>
+          <div class="settings-block" id="sessionFeelBlock">
+            <p class="metric-label">Próxima sesión</p>
+            <p class="setting-note" id="nextSessionFeelNote">Si la próxima te queda fácil o difícil, ajustala acá. Solo cambia esa sesión; el resto del plan se mantiene.</p>
+            <p class="setting-note" id="nextSessionStructureNote">—</p>
+            <div class="recalibrate-actions">
+              <button type="button" class="quiet-button" id="recalibrateEasier">Me queda difícil</button>
+              <button type="button" class="quiet-button" id="recalibrateHarder">Me queda fácil</button>
+            </div>
+            <button type="button" class="text-button" id="undoRecalibrate" hidden>Deshacer último ajuste</button>
           </div>
           <div class="settings-block">
             <p class="metric-label">Cuenta en este dispositivo</p>

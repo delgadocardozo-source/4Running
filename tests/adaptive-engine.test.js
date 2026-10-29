@@ -434,8 +434,19 @@ console.log('\n=== Onboarding / intake → estructura inicial ===');
   const nRun = none.sessions.find(s => s.kind === 'run');
   assert(nRun && nRun.structure.runSeconds === 30, 'nivel none: bloques muy cortos');
 
+  const pendingBefore = (beginner.sessions || []).filter(s =>
+    s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled')
+  ).length;
   const harder = A.recalibrateLoad(beginner, [], { runSpeed: 7.5 }, 'harder');
   assert(harder.changed, 'recalibrar más difícil cambia la sesión');
+  assert(harder.plan.lastRecalibration?.previousStructure, 'guarda estructura previa para deshacer');
+  const pendingAfter = (harder.plan.sessions || []).filter(s =>
+    s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled')
+  ).length;
+  assert(pendingAfter === pendingBefore, 'recalibrar no regenera ni borra el horizonte');
+  const undone = A.undoRecalibration(harder.plan, { runSpeed: 7.5 });
+  assert(undone.changed, 'se puede deshacer el ajuste');
+  assert(undone.next === harder.previous, 'deshacer vuelve a la estructura anterior');
   const easier = A.recalibrateLoad(harder.plan, [], { runSpeed: 7.5 }, 'easier');
   assert(easier.changed || easier.message, 'recalibrar más fácil responde');
 }

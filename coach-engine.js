@@ -235,6 +235,20 @@
     return out;
   }
 
+  function undoRecalibrateFocus(plan, settings = {}) {
+    if (!window.PaceAdaptive?.undoRecalibration) {
+      return { plan, changed: false, message: 'Deshacer no disponible.' };
+    }
+    const out = window.PaceAdaptive.undoRecalibration(plan, settings);
+    if (out.plan) savePlan(out.plan);
+    return out;
+  }
+
+  function canUndoRecalibration(plan) {
+    const snap = plan?.lastRecalibration;
+    return Boolean(snap && !snap.undone && snap.previousStructure && snap.sessionId);
+  }
+
   function loadDemoData(settings = {}) {
     let plan = normalizePlan(buildDemoPlan());
     const logs = buildDemoLogs();
@@ -1488,6 +1502,8 @@
     applyIntake,
     updatePlanPreferences,
     recalibrateFocus,
+    undoRecalibrateFocus,
+    canUndoRecalibration,
     loadDemoData,
     resetToOnboarding,
     upgradePlanAdaptive,

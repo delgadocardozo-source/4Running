@@ -685,12 +685,9 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
 .adapt-pace-stats { margin-top: 0; }
 .adapt-pace-stats small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 
-.recalibrate-row {
-  display: grid; gap: 8px; margin-top: 12px;
-  padding: 12px 0 4px; border-top: 1px solid var(--line);
-}
-.recalibrate-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.recalibrate-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .recalibrate-actions .quiet-button { flex: 1; min-width: 140px; justify-content: center; }
+#undoRecalibrate { margin-top: 8px; width: 100%; text-align: center; }
 .settings-block {
   display: grid; gap: 4px;
   margin: 18px 0 8px; padding-top: 8px;
