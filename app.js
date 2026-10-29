@@ -2527,64 +2527,6 @@
     if (!$('#editLogDialog').open) $('#editLogDialog').showModal();
   }
 
-  function importExternalActivity() {
-    const raw = $('#importActivityJson')?.value?.trim();
-    if (!raw) {
-      showToast('Pegá un JSON de actividad');
-      return;
-    }
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      showToast('JSON inválido');
-      return;
-    }
-    const date = data.date || localDateISO();
-    const time = data.time || data.duration || null;
-    const distanceKm = data.distanceKm != null ? Number(data.distanceKm) : (data.distance != null ? Number(data.distance) : null);
-    const log = {
-      id: `${date}-import-${Date.now()}`,
-      date,
-      type: data.type || 'Exterior',
-      environment: data.environment || 'outdoor',
-      planSessionId: null,
-      time,
-      elapsedSec: time ? timeToSec(time) : null,
-      distanceKm: Number.isFinite(distanceKm) ? distanceKm : null,
-      distanceEstimated: false,
-      maxRunBlockSec: data.maxRunBlockSec != null ? Number(data.maxRunBlockSec) : null,
-      rpe: data.rpe != null ? Number(data.rpe) : null,
-      pain: Boolean(data.pain),
-      painLocation: data.painLocation || '',
-      painIntensity: data.painIntensity != null ? Number(data.painIntensity) : null,
-      worseningDuringRun: false,
-      alteredGait: false,
-      forcedStop: false,
-      severeWarning: false,
-      prescriptionCompleted: true,
-      execution: 'completed',
-      progression: null,
-      notes: data.notes || 'Importada manualmente',
-      source: 'external'
-    };
-    if (log.elapsedSec && log.distanceKm && window.PaceAdaptive) {
-      log.paceMetrics = window.PaceAdaptive.computeSessionPaceMetrics({
-        elapsedSec: log.elapsedSec,
-        distanceKm: log.distanceKm,
-        structure: null,
-        speeds: settings
-      });
-    }
-    logs.push(log);
-    Coach().saveLogs(logs);
-    $('#importActivityJson').value = '';
-    renderHistory();
-    window.PaceProduct?.track?.('import_external_activity');
-    showToast('Actividad externa importada (no movió el plan)');
-    navTo('history');
-  }
-
   function askConfirm({ title, body, ok = 'Confirmar', cancel = 'Volver', danger = false }) {
     const dialog = $('#confirmDialog');
     const session = $('#sessionDialog');
@@ -2985,7 +2927,6 @@
       window.PaceProduct.track('legal_accepted');
       if (Coach().needsOnboarding(plan)) openOnboarding();
     });
-    $('#importActivityBtn')?.addEventListener('click', importExternalActivity);
     $('#editLogForm')?.addEventListener('submit', (e) => {
       e.preventDefault();
       const id = $('#editLogId').value;

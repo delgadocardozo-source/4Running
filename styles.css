@@ -746,7 +746,7 @@ input:focus, select:focus { border-color: rgba(255,255,255,.4); }
 .week-day .dot-test { color: #7dd3fc; }
 .help-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .legal-copy { display: grid; gap: 10px; color: var(--muted); line-height: 1.45; }
-#importActivityJson, #accountDisplayName {
+#accountDisplayName {
   width: 100%; text-align: left; min-height: 44px; font-size: 15px;
 }
 #preferredSurfaceSelect { width: min(200px, 52vw); min-height: 40px; }
