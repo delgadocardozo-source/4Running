@@ -249,6 +249,30 @@
     return Boolean(snap && !snap.undone && snap.previousStructure && snap.sessionId);
   }
 
+  function restoreFocusFromProfile(plan, logs, settings) {
+    if (!window.PaceAdaptive?.restoreFocusSession) {
+      return { plan, changed: false, message: 'Restablecer no disponible.' };
+    }
+    const out = window.PaceAdaptive.restoreFocusSession(plan, logs, settings);
+    if (out.plan) savePlan(out.plan);
+    return out;
+  }
+
+  function refreshStaleFocusDates(plan) {
+    if (!window.PaceAdaptive?.refreshStaleSchedule || !plan) return plan;
+    const next = plan;
+    let changed = false;
+    for (const s of next.sessions || []) {
+      if (s.kind !== 'run') continue;
+      if (!(s.status === 'pending' || s.status === 'rescheduled')) continue;
+      const before = s.scheduledDate;
+      window.PaceAdaptive.refreshStaleSchedule(s);
+      if (before !== s.scheduledDate) changed = true;
+    }
+    if (changed) savePlan(next);
+    return next;
+  }
+
   function loadDemoData(settings = {}) {
     let plan = normalizePlan(buildDemoPlan());
     const logs = buildDemoLogs();
@@ -1504,6 +1528,8 @@
     recalibrateFocus,
     undoRecalibrateFocus,
     canUndoRecalibration,
+    restoreFocusFromProfile,
+    refreshStaleFocusDates,
     loadDemoData,
     resetToOnboarding,
     upgradePlanAdaptive,

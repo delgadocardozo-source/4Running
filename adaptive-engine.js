@@ -4,7 +4,7 @@
  * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.3.1';
+  const ENGINE_VERSION = '4.3.2';
 
   /** Catálogo de objetivos de producto (intake + ajustes). */
   const GOAL_CATALOG = {
@@ -631,6 +631,67 @@
     openRun.estimatedKm = estimateKm(openRun.structure, settings);
   }
 
+  /** Carga comparable: prioriza continuo, luego volumen de carrera, luego reps. */
+  function loadRank(st) {
+    const m = metrics(st);
+    return (m.continuousSec * 1000) + (m.totalRunSec * 10) + (Number(st.reps) || 0);
+  }
+
+  /**
+   * Piso seguro: no bajar de la estructura de onboarding (ni de la última sesión
+   * completa razonable). Evita aplastar a 4×30s por muchos “me queda difícil”.
+   */
+  function sessionFloorStructure(plan, logs = [], settings = {}) {
+    const profile = deriveProfile(logs, plan, settings);
+    const intakeKey = plan?.intake?.continuousAbility || profile.intakeAbility || '1min';
+    const conservative = Boolean(plan?.intake?.hasPain || profile.caution);
+    let floor = startingStructureForAbility(intakeKey, { conservative });
+    const completed = validTrainingLogs(logs)
+      .filter(l => l.prescriptionCompleted !== false && l.execution !== 'aborted' && Number(l.rpe) <= 7)
+      .slice(0, 3);
+    for (const log of completed) {
+      const sid = log.planSessionId;
+      const sess = sid ? (plan?.sessions || []).find(s => s.id === sid) : null;
+      const st = sess?.structure || log.structure || null;
+      if (!st || st.rest) continue;
+      const classic = structureFromClassic(st);
+      if (loadRank(classic) > loadRank(floor)) floor = classic;
+    }
+    // Intervalos: caminata mínima 60s (0:30 no es recuperación útil).
+    if (floor.walkSeconds > 0 && floor.walkSeconds < 60) {
+      floor = structureFromClassic({ ...floor, walkSeconds: 60 });
+    }
+    return structureFromClassic(floor);
+  }
+
+  function isAtOrBelowFloor(structure, floor) {
+    return loadRank(structureFromClassic(structure)) <= loadRank(structureFromClassic(floor));
+  }
+
+  function filterCandidatesAboveFloor(candidates, floor, action) {
+    if (normalizeProgressAction(action) !== 'reduce') return candidates;
+    const kept = (candidates || []).filter(c => {
+      if (!c?.structure) return false;
+      if (c.primaryVar == null) return true;
+      return loadRank(c.structure) >= loadRank(floor);
+    });
+    return kept.length ? kept : candidates;
+  }
+
+  function refreshStaleSchedule(session, today = localDateISO()) {
+    if (!session) return session;
+    const d = session.scheduledDate;
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(String(d))) {
+      session.scheduledDate = today;
+      return session;
+    }
+    if (String(d) < today) {
+      session.scheduledDate = today;
+      if (session.status === 'rescheduled') session.status = 'pending';
+    }
+    return session;
+  }
+
   /**
    * Ajusta SOLO la próxima sesión pendiente.
    * No borra ni regenera el resto del horizonte (evita desconfigurar el plan entero).
@@ -643,15 +704,28 @@
     if (!openRun) {
       return { plan: next, changed: false, message: 'No hay una sesión pendiente para recalibrar.' };
     }
+    refreshStaleSchedule(openRun);
     const profile = deriveProfile(logs, next, settings);
+    const floor = sessionFloorStructure(next, logs, settings);
+    if (direction === 'easier' && isAtOrBelowFloor(openRun.structure, floor)) {
+      return {
+        plan: next,
+        changed: false,
+        message: `Ya estás en el piso seguro (${describeStructure(floor)}). Si duele, registrá recuperación; si quedó mal el plan, restablecé la sesión desde Ajustes.`
+      };
+    }
     const action = direction === 'harder' ? 'progress_continuous' : 'reduce';
-    const candidates = generateCandidates(openRun.structure, action, profile, next);
+    let candidates = generateCandidates(openRun.structure, action, profile, next);
+    candidates = filterCandidatesAboveFloor(candidates, floor, action);
     const picked = pickCandidate(candidates, action);
     if (!picked?.structure) {
       return { plan: next, changed: false, message: 'No encontramos un ajuste viable ahora.' };
     }
     const prev = structureFromClassic(openRun.structure);
-    const neo = structureFromClassic(picked.structure);
+    let neo = structureFromClassic(picked.structure);
+    if (direction === 'easier' && loadRank(neo) < loadRank(floor)) {
+      neo = structureFromClassic(floor);
+    }
     const same = describeStructure(prev) === describeStructure(neo);
     let chosen = neo;
     if (same && direction === 'harder') {
@@ -720,6 +794,7 @@
     openRun.prescribedTotalRunSec = m.totalRunSec;
     openRun.estimatedDurationMin = m.totalMin;
     openRun.estimatedKm = estimateKm(restored, settings);
+    refreshStaleSchedule(openRun);
     next.lastRecalibration = {
       ...snap,
       undone: true,
@@ -731,6 +806,69 @@
       previous: describeStructure(current),
       next: describeStructure(restored),
       message: `Volvimos a: ${describeStructure(restored)}.`
+    };
+  }
+
+  /**
+   * Reconstruye la próxima sesión pendiente desde el nivel de onboarding/perfil.
+   * Para planes aplastados (p. ej. 4×30s) donde deshacer ya no alcanza.
+   */
+  function restoreFocusSession(plan, logs = [], settings = {}) {
+    const next = clone(plan || { sessions: [] });
+    const openRun = (next.sessions || []).find(s =>
+      s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled')
+    );
+    if (!openRun) {
+      return { plan: next, changed: false, message: 'No hay una sesión pendiente para restablecer.' };
+    }
+    const prev = structureFromClassic(openRun.structure);
+    const profile = deriveProfile(logs, next, settings);
+    const floor = sessionFloorStructure(next, logs, settings);
+    // null fallback → usa intakeAbility / stage del perfil (nivel de onboarding).
+    const fromProfile = structureFromClassic(structureForProfile(profile, null) || floor);
+    const chosen = loadRank(fromProfile) >= loadRank(floor)
+      ? fromProfile
+      : floor;
+    const beforeDate = openRun.scheduledDate;
+    refreshStaleSchedule(openRun);
+    if (describeStructure(prev) === describeStructure(chosen)) {
+      const dateFixed = beforeDate !== openRun.scheduledDate;
+      return {
+        plan: next,
+        changed: dateFixed,
+        previous: describeStructure(prev),
+        next: describeStructure(chosen),
+        message: dateFixed
+          ? `La estructura ya era razonable; actualizamos la fecha a hoy.`
+          : `La próxima ya está en un nivel razonable: ${describeStructure(chosen)}.`
+      };
+    }
+    openRun.structure = chosen;
+    openRun.changeSummary = compareStructures(prev, chosen);
+    openRun.justification = 'Restableciste la sesión al nivel de tu perfil / onboarding.';
+    openRun.decisionAction = 'restore_profile';
+    openRun.title = `Sesión · ${describeStructure(chosen)}`;
+    const m = metrics(chosen);
+    openRun.prescribedContinuousSec = m.continuousSec;
+    openRun.prescribedTotalRunSec = m.totalRunSec;
+    openRun.estimatedDurationMin = m.totalMin;
+    openRun.estimatedKm = estimateKm(chosen, settings);
+    refreshStaleSchedule(openRun);
+    next.lastRecalibration = {
+      at: localDateISO(),
+      direction: 'restore',
+      sessionId: openRun.id,
+      previousStructure: clone(prev),
+      from: describeStructure(prev),
+      to: describeStructure(chosen),
+      undone: false
+    };
+    return {
+      plan: next,
+      changed: true,
+      previous: describeStructure(prev),
+      next: describeStructure(chosen),
+      message: `Restablecimos la próxima sesión: ${describeStructure(chosen)}.`
     };
   }
 
@@ -1458,17 +1596,26 @@
         || (profile.needsReassess ? 'reassess' : 'consolidate');
       const effectiveAction = action === 'repeat' ? 'consolidate' : action;
       const genAction = effectiveAction === 'recovery' ? 'consolidate' : effectiveAction;
-      const candidates = generateCandidates(base, genAction, profile, plan);
+      let candidates = generateCandidates(base, genAction, profile, plan);
+      if (genAction === 'reduce') {
+        const floor = sessionFloorStructure(plan, logs, settings);
+        candidates = filterCandidatesAboveFloor(candidates, floor, genAction);
+      }
       const picked = pickCandidate(candidates, genAction);
-      const diff = compareStructures(base, picked.structure);
+      let nextStructure = picked?.structure || base;
+      if (genAction === 'reduce') {
+        const floor = sessionFloorStructure(plan, logs, settings);
+        if (loadRank(nextStructure) < loadRank(floor)) nextStructure = floor;
+      }
+      const diff = compareStructures(base, nextStructure);
 
-      plan.sessions.push(makeRunItem(plan, picked.structure, {
+      plan.sessions.push(makeRunItem(plan, nextStructure, {
         action: effectiveAction,
         justification: decision?.reason || `Motor ${ENGINE_VERSION} · ${ACTION_LABELS[effectiveAction] || effectiveAction}.`,
         changeSummary: diff,
         sessionGoal: sessionGoalFor(profile, effectiveAction),
         primaryDimension: decision?.priorityDimension || profile.priorityDimension,
-        estimatedKm: estimateKm(picked.structure, speeds)
+        estimatedKm: estimateKm(nextStructure, speeds)
       }));
 
       // Solo la primera generación tras una decisión usa esa decisión; el resto consolida
@@ -1821,6 +1968,9 @@
     buildPlanFromIntake,
     recalibrateLoad,
     undoRecalibration,
+    restoreFocusSession,
+    sessionFloorStructure,
+    refreshStaleSchedule,
     stageFromContinuousSec,
     validTrainingLogs,
     pendingRuns,
