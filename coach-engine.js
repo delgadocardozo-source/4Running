@@ -187,7 +187,12 @@
     if (!window.PaceAdaptive?.buildPlanFromIntake) {
       throw new Error('Motor adaptativo no disponible para onboarding');
     }
+    const previous = loadPlan();
     const plan = window.PaceAdaptive.buildPlanFromIntake(intake, settings);
+    const kept = (previous.sessions || []).filter(s => (s.attempts || []).length || s.status === 'completed').map(s => ({ ...s, status: ['pending', 'rescheduled'].includes(s.status) ? 'archived' : s.status }));
+    const maxOrder = Math.max(0, ...kept.map(s => Number(s.order) || 0));
+    if ((previous.sessions || []).some(s => s.blockedUntilRest)) plan.sessions[0].blockedUntilRest = true;
+    plan.sessions = [...kept, ...plan.sessions.map((s, i) => ({ ...s, id: `${s.id}-intake-${Date.now()}-${i}`, order: maxOrder + i + 1 }))];
     savePlan(plan);
     if (!localStorage.getItem(LOGS_KEY)) saveLogs([]);
     return plan;
@@ -259,18 +264,11 @@
   }
 
   function refreshStaleFocusDates(plan) {
-    if (!window.PaceAdaptive?.refreshStaleSchedule || !plan) return plan;
-    const next = plan;
-    let changed = false;
-    for (const s of next.sessions || []) {
-      if (s.kind !== 'run') continue;
-      if (!(s.status === 'pending' || s.status === 'rescheduled')) continue;
-      const before = s.scheduledDate;
-      window.PaceAdaptive.refreshStaleSchedule(s);
-      if (before !== s.scheduledDate) changed = true;
-    }
-    if (changed) savePlan(next);
-    return next;
+    if (!window.PaceAdaptive || !plan) return plan;
+    const before = JSON.stringify((plan.sessions || []).map(s => s.scheduledDate));
+    window.PaceAdaptive.allocateScheduleDates(plan, window.PaceAdaptive.paramsOf(plan));
+    if (before !== JSON.stringify((plan.sessions || []).map(s => s.scheduledDate))) savePlan(plan);
+    return plan;
   }
 
   function loadDemoData(settings = {}) {
@@ -382,34 +380,105 @@
   }
 
   function saveLogs(logs) {
-    localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
+    let cached = [];
+    try { cached = JSON.parse(localStorage.getItem(LOGS_KEY) || '[]'); } catch { /* keep the supplied records */ }
+    const byId = new Map([...(Array.isArray(cached) ? cached : []), ...(logs || [])].filter(log => log && log.id).map(log => [log.id, log]));
+    localStorage.setItem(LOGS_KEY, JSON.stringify([...byId.values()]));
   }
 
   /** Corrige un log ya guardado (no reescribe la progresión del plan). */
-  function updateStoredLog(logs, logId, patch = {}) {
-    const next = clone(logs || []);
-    const idx = next.findIndex(l => l.id === logId);
-    if (idx < 0) return { logs: next, updated: null, ok: false };
-    const prev = next[idx];
-    const allowed = [
-      'time', 'elapsedSec', 'distanceKm', 'distanceEstimated', 'rpe', 'pain',
-      'painLocation', 'painIntensity', 'notes', 'couldContinue', 'maxRunBlockSec',
-      'type', 'environment', 'paceMetrics'
-    ];
-    const cleaned = {};
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(patch, key)) cleaned[key] = patch[key];
+  function reviewFutureAfterCorrection(plan, logs, corrected, settings = {}) {
+    const next = clone(plan);
+    const A = window.PaceAdaptive;
+    const valid = A.validTrainingLogs(logs);
+    const latest = valid[0];
+    if (!latest) return { plan: next, changed: false, message: 'Registro corregido; no hay entrenamiento del plan para revisar.' };
+    const prior = valid.filter(log => log.id !== latest.id);
+    let decision = A.decideAdaptive(latest, prior, next);
+    if (A.evidenceForLog(corrected).errors.length && decision.progression !== 'recovery') decision = { ...decision, action: 'repeat', progression: 'repeat', reason: 'Un dato corregido requiere confirmación. Mantenemos provisionalmente la próxima carga.' };
+    if ((corrected.worseningDuringRun || corrected.alteredGait || corrected.forcedStop || corrected.severeWarning || corrected.pain && Number(corrected.painIntensity) >= 3) && decision.progression !== 'recovery') decision = { ...decision, action: 'recovery', progression: 'recovery', reason: 'La corrección registra una señal de seguridad: revisá la molestia antes de volver a correr.' };
+    const baseItem = next.sessions.find(s => s.id === latest.planSessionId);
+    const baseline = latest.prescriptionSnapshot?.structure || latest.prescriptionSnapshot || baseItem?.structure;
+    const pending = sortedPlanSessions(next).filter(s => s.kind === 'run' && ['pending', 'rescheduled'].includes(s.status));
+    let changed = false;
+    for (const item of pending) {
+      if ((item.attempts || []).length) {
+        if (decision.progression === 'recovery') item.blockedUntilRest = true;
+        if (decision.progression !== 'advance') continue;
+        item.status = 'archived';
+        const replacement = A.makeRunItem(next, item.structure, { title: 'Próxima sesión revisada', justification: decision.reason });
+        replacement.id += '-correction'; next.sessions.push(replacement); pending.push(replacement);
+        continue; // Preserve every prescription already attempted.
+      }
+      const before = clone(item.structure);
+      let chosen = baseline || before;
+      if (decision.progression === 'advance') chosen = A.pickCandidate(A.generateCandidates(chosen, decision.action, A.deriveProfile(logs, next, settings), next), decision.action)?.structure || chosen;
+      chosen = A.constrainPrescription(chosen, next, before);
+      item.structure = clone(chosen);
+      item.blockedUntilRest = item.blockedUntilRest || decision.progression === 'recovery';
+      item.justification = decision.reason;
+      item.decisionAction = decision.action;
+      item.changeSummary = A.compareStructures(before, chosen);
+      const metrics = A.metrics(chosen);
+      item.prescribedContinuousSec = metrics.continuousSec;
+      item.prescribedTotalRunSec = metrics.totalRunSec;
+      item.estimatedDurationMin = metrics.totalMin;
+      item.estimatedKm = A.estimateKm(chosen, settings);
+      changed = true;
     }
-    next[idx] = {
-      ...prev,
-      ...cleaned,
-      id: prev.id,
-      planSessionId: prev.planSessionId,
-      date: prev.date,
-      editedAt: window.PaceAdaptive ? window.PaceAdaptive.localDateISO() : new Date().toISOString().slice(0, 10)
-    };
+    if (!pending.length) A.ensureHorizon(next, logs, settings, decision);
+    next.futureReview = { at: new Date().toISOString(), correctedLogId: corrected.id, action: decision.action, reason: decision.reason };
+    A.allocateScheduleDates(next, A.paramsOf(next));
+    return { plan: next, changed, action: decision.action, message: decision.reason };
+  }
+
+  function updateStoredLog(logs, logId, patch = {}, context = {}) {
+    const next = clone(logs || []);
+    const idx = next.findIndex(log => log.id === logId);
+    if (idx < 0) return { logs: next, updated: null, ok: false, error: 'No se encontró el registro.' };
+    const prev = next[idx];
+    const allowed = ['time', 'elapsedSec', 'distanceKm', 'distanceEstimated', 'rpe', 'pain', 'painLocation', 'painIntensity', 'notes', 'couldContinue', 'maxRunBlockSec', 'type', 'environment', 'paceMetrics', 'worseningDuringRun', 'alteredGait', 'forcedStop', 'severeWarning', 'talkTest'];
+    const cleaned = Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(patch, key)).map(key => [key, patch[key]]));
+    for (const [key, min, max] of [['rpe', 0, 10], ['maxRunBlockSec', 0, 14400], ['distanceKm', 0, 1000], ['elapsedSec', 1, 86400]]) {
+      const value = cleaned[key];
+      if (value != null && value !== '' && (!Number.isFinite(Number(value)) || Number(value) < min || Number(value) > max)) return { logs: next, updated: null, ok: false, error: 'El valor corregido está fuera de rango.' };
+    }
+    const now = new Date().toISOString();
+    const originalDecision = prev.originalDecision || { action: prev.action, adaptiveAction: prev.adaptiveAction, progression: prev.progression, reason: prev.decisionReason, reasonCode: clone(prev.reasonCode || []), at: prev.createdAt || null };
+    next[idx] = { ...prev, ...cleaned, id: prev.id, date: prev.date, planSessionId: prev.planSessionId, createdAt: prev.createdAt, originalDecision, editHistory: [...(prev.editHistory || []), { at: now, before: Object.fromEntries(Object.keys(cleaned).map(key => [key, prev[key]])), after: clone(cleaned) }], editedAt: now, updatedAt: now };
+    const plan = context.plan || loadPlan();
+    const review = reviewFutureAfterCorrection(plan, next, next[idx], context.settings || loadSettingsSoft());
     saveLogs(next);
-    return { logs: next, updated: next[idx], ok: true };
+    savePlan(review.plan);
+    return { logs: next, updated: next[idx], plan: review.plan, review, ok: true };
+  }
+
+  function requestWalkToJog(plan, logs = [], settings = {}, { confirmed = false } = {}) {
+    const next = clone(plan);
+    const focus = getFocusSession(next);
+    const run = getUnderlyingPlanItem(next, focus);
+    const latest = window.PaceAdaptive.validTrainingLogs(logs)[0];
+    const A = window.PaceAdaptive;
+    const eligible = focus?.kind === 'run' && run?.structure?.runSeconds === 0 && !run.blockedUntilRest && latest && A.observedCompletion(latest) && A.evidenceForLog(latest).sufficient && Number(latest.maxRunBlockSec) === 0 && Number(latest.rpe) <= 5 && latest.talkTest === 'yes' && !latest.pain && !latest.worseningDuringRun && !latest.alteredGait && !latest.forcedStop && !latest.severeWarning && (A.metrics(run.structure).totalSec <= 0 || (latest.walkSeconds || A.durationOfLog?.(latest) || 0) >= 600);
+    if (!eligible) return { plan: next, eligible: false, changed: false, message: 'Primero completá una caminata cómoda, sin molestias y pudiendo conversar. Si hay síntomas, mantené la pausa.' };
+    const base = run.structure;
+    const preview = A.structureFromClassic({ warmSeconds: 300, coolSeconds: 300, runSeconds: 30, walkSeconds: 90, reps: 4 });
+    const budget = (Number(next.intake?.availableMinutes) || 30) * 60;
+    preview.reps = Math.max(1, Math.min(preview.reps, Math.floor(Math.max(0, budget - 600) / 120)));
+    if (A.metrics(preview).totalSec > budget) return { plan: next, eligible: false, changed: false, message: 'Necesitamos al menos tiempo suficiente para una prueba corta con calentamiento y calma.' };
+    if (!confirmed) return { plan: next, eligible: true, changed: false, preview, message: `Podés probar ${A.describeStructure(preview)}. Elegirlo es opcional; tu caminata y sus intentos se conservan.` };
+    const at = new Date().toISOString();
+    if ((run.attempts || []).length) run.status = 'archived';
+    else run.status = 'superseded';
+    for (const item of next.sessions) if (['pending', 'rescheduled'].includes(item.status) && !(item.attempts || []).length) item.status = 'superseded';
+    const candidate = A.makeRunItem(next, preview, { title: 'Evaluación opcional · primer trote corto', justification: 'Elegiste probar un trote corto después de una caminata cómoda, sin molestias y pudiendo conversar.', scheduledDate: A.addDaysISO(latest.date, 2) });
+    candidate.id += '-walk-to-jog'; candidate.isAssessment = true;
+    next.sessions.push(candidate);
+    next.walkToJogAcceptedAt = at;
+    next.intake = { ...(next.intake || {}), assessment: 'jog', continuousAbility: 'none', walkTolerance: '15', hasPain: false };
+    A.ensureHorizon(next, logs, settings, { action: 'consolidate', reason: 'Primera prueba de trote elegida por vos; no se presupone capacidad de carrera.' });
+    savePlan(next);
+    return { plan: next, eligible: true, changed: true, next: candidate, preview, message: 'Prueba corta elegida. Conservamos tus caminatas y la próxima se adapta a lo que observes.' };
   }
 
   function loadPlan() {
@@ -465,7 +534,7 @@
         gateForId: open.id,
         structure: {
           rest: true,
-          note: 'Ya registramos el intento de entrenamiento. Ahora toca recuperación; la prescripción del plan no se duplicó.'
+          note: (open.attempts || []).length ? 'Guardamos el intento. Mantené la pausa hasta que la molestia deje de limitarte; no alcanza con marcar un día de descanso.' : 'Evaluación pospuesta por molestia limitante. Mantené la pausa y consultá a un profesional si persiste o empeora. Podrás revisar tu situación antes de retomar.'
         }
       };
     }
@@ -513,58 +582,18 @@
 
   /** Intentos válidos de entrenamiento (incluyen repeats). Excluye recovery. */
   function validTrainingAttempts(logs = [], plan = null) {
-    const fromLogs = (logs || [])
-      .filter(l => l.type !== 'Recuperación' && l.source !== 'rest')
-      .filter(l => l.source !== 'external')
-      .filter(l => l.execution !== 'skipped')
-      .filter(l => l.kind !== 'recovery-gate')
-      .map(l => ({
-        id: l.id,
-        date: l.date,
-        planSessionId: l.planSessionId,
-        execution: l.execution || 'completed',
-        prescriptionCompleted: l.prescriptionCompleted !== false && l.execution !== 'aborted',
-        rpe: l.rpe,
-        pain: Boolean(l.pain),
-        maxRunBlockSec: l.maxRunBlockSec,
-        worseningDuringRun: Boolean(l.worseningDuringRun),
-        alteredGait: Boolean(l.alteredGait),
-        forcedStop: Boolean(l.forcedStop),
-        severeWarning: Boolean(l.severeWarning),
-        progression: l.progression
-      }));
-
-    // Completar con attempts del plan que aún no estén en logs (p. ej. skips internos).
-    const seen = new Set(fromLogs.map(a => a.id));
+    const fromLogs = window.PaceAdaptive.validTrainingLogs(logs);
+    const seen = new Set(fromLogs.map(log => log.id));
     const fromPlan = [];
-    if (plan?.sessions) {
-      for (const s of plan.sessions) {
-        if (s.kind !== 'run') continue;
-        for (const a of s.attempts || []) {
-          if (a.kind === 'recovery-gate' || a.execution === 'skipped') continue;
-          const key = a.logId || a.id;
-          if (seen.has(key)) continue;
-          fromPlan.push({
-            id: key,
-            date: a.date,
-            planSessionId: s.id,
-            execution: a.execution || 'completed',
-            prescriptionCompleted: a.prescriptionCompleted !== false && a.execution !== 'aborted',
-            rpe: a.rpe,
-            pain: Boolean(a.pain),
-            maxRunBlockSec: a.maxRunBlockSec,
-            worseningDuringRun: Boolean(a.worseningDuringRun),
-            alteredGait: Boolean(a.alteredGait),
-            forcedStop: Boolean(a.forcedStop),
-            severeWarning: Boolean(a.severeWarning),
-            progression: a.progression
-          });
-        }
+    for (const session of plan?.sessions || []) {
+      if (session.kind !== 'run') continue;
+      for (const attempt of session.attempts || []) {
+        const key = attempt.logId || attempt.id;
+        if (seen.has(key) || attempt.kind === 'recovery-gate' || attempt.execution === 'skipped') continue;
+        fromPlan.push({ ...attempt, id: key, planSessionId: session.id, type: 'Plan', source: 'plan-attempt' });
       }
     }
-
-    return [...fromLogs, ...fromPlan]
-      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.id).localeCompare(String(a.id)));
+    return window.PaceAdaptive.validTrainingLogs([...fromPlan, ...fromLogs]);
   }
 
   function recentRunLogs(logs, n = 3) {
@@ -590,58 +619,8 @@
    * en la ventana, el último completado empeora vs el primero
    * (RPE +2 o continuo medido −20%).
    */
-  function hasSustainedDeterioration(windowAttempts) {
-    const completed = windowAttempts
-      .filter(a => a.prescriptionCompleted && a.execution === 'completed')
-      .slice()
-      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
-    if (completed.length < 2) return false;
-    const first = completed[0];
-    const last = completed[completed.length - 1];
-    const rpeUp = first.rpe != null && last.rpe != null && Number(last.rpe) - Number(first.rpe) >= 2;
-    const contFirst = Number(first.maxRunBlockSec) || 0;
-    const contLast = Number(last.maxRunBlockSec) || 0;
-    const contDown = contFirst > 0 && contLast > 0 && contLast < contFirst * 0.8;
-    return rpeUp || contDown;
-  }
-
-  /**
-   * Tendencia reciente favorable — últimos 3 intentos válidos
-   * (incluye repeticiones del mismo PlanItem; excluye recovery).
-   */
   function recentTrendFavorable(priorLogs = [], plan = null) {
-    const valid = validTrainingAttempts(priorLogs, plan).slice(0, 3);
-    if (valid.length < 3) {
-      return {
-        ok: false,
-        reason: 'Menos de 3 intentos válidos: RPE 6 → repeat por defecto.',
-        sampleSize: valid.length
-      };
-    }
-
-    const completed = valid.filter(a => a.prescriptionCompleted && a.execution === 'completed');
-    if (completed.length < 2) {
-      return { ok: false, reason: 'Menos de 2/3 intentos completados en la ventana.', sampleSize: valid.length };
-    }
-
-    if (completed.some(a => a.rpe != null && Number(a.rpe) > 6)) {
-      return { ok: false, reason: 'Algún intento completado reciente con RPE > 6.', sampleSize: valid.length };
-    }
-
-    if (valid.some(a => a.worseningDuringRun || a.alteredGait || a.forcedStop || a.severeWarning)) {
-      return { ok: false, reason: 'Alertas de seguridad en la ventana (empeora / marcha / freno).', sampleSize: valid.length };
-    }
-
-    if (hasSustainedDeterioration(valid)) {
-      return { ok: false, reason: 'Deterioro sostenido de rendimiento o tolerancia al esfuerzo.', sampleSize: valid.length };
-    }
-
-    const conf = readinessConfidence(priorLogs);
-    if (conf.confidence === 'baja') {
-      return { ok: false, reason: 'Confianza baja: la tendencia no habilita advance.', sampleSize: valid.length };
-    }
-
-    return { ok: true, reason: 'Tendencia reciente favorable (2/3+ completados, RPE≤6, sin alertas, confianza ≥ media).', sampleSize: valid.length };
+    return window.PaceAdaptive.trendFavorable(validTrainingAttempts(priorLogs, plan), plan);
   }
 
   /** @deprecated usar recentTrendFavorable */
@@ -709,22 +688,8 @@
     }
   }
 
-  function readinessConfidence(logs) {
-    const runs = validTrainingAttempts(logs);
-    const completed = runs.filter(a => a.prescriptionCompleted && a.execution === 'completed');
-    const withRpe = completed.filter(l => l.rpe != null).length;
-    const withCompliance = completed.length;
-    const withCont = completed.filter(l => l.maxRunBlockSec != null).length;
-    const recent = runs.slice(0, 3).length;
-
-    // Baja: faltan esenciales o muy pocos datos.
-    if (withRpe < 2 || withCompliance < 2 || recent < 2) {
-      return { confidence: 'baja', confidenceLabel: 'Confianza baja', note: 'Datos esenciales incompletos: no se confirma advance ni Listo.' };
-    }
-    if (withRpe >= 4 && withCont >= 3 && recent >= 3) {
-      return { confidence: 'alta', confidenceLabel: 'Confianza alta', note: 'Registro completo y coherente para evaluar avance.' };
-    }
-    return { confidence: 'media', confidenceLabel: 'Confianza media', note: 'Datos esenciales completos; evaluar con cautela.' };
+  function readinessConfidence(logs, plan = null) {
+    return window.PaceAdaptive.trainingConfidence(validTrainingAttempts(logs, plan), plan);
   }
 
   function confidenceSufficient(conf) {
@@ -848,130 +813,9 @@
       };
     }
 
-    const rpe = Number(log.rpe);
-    const override = Boolean(log.worseningDuringRun || log.alteredGait || log.forcedStop || log.severeWarning);
-    const prescriptionCompleted = log.prescriptionCompleted !== false && log.execution !== 'aborted';
-    const conf = readinessConfidence([...(priorLogs || []), log]);
-    const reasonCode = [];
-
-    if (override) {
-      reasonCode.push('SAFETY_OVERRIDE');
-      return {
-        progression: 'recovery',
-        action: 'recovery',
-        reason: log.severeWarning
-          ? 'Alerta severa: recovery obligatorio. Considerá atención médica si es urgente; la app no diagnostica.'
-          : 'Override de seguridad (empeora / marcha / freno): recovery, independientemente del RPE.',
-        medicalNotice: Boolean(log.severeWarning),
-        override: true,
-        reasonCode
-      };
-    }
-
-    if (log.pain && Number(log.painIntensity || 0) >= 3) {
-      reasonCode.push('PAIN_MODERATE');
-      return {
-        progression: 'recovery',
-        action: 'recovery',
-        reason: 'Molestia moderada o más: recovery. El intento queda registrado.',
-        medicalNotice: false,
-        override: false,
-        reasonCode
-      };
-    }
-
-    if (!prescriptionCompleted) {
-      reasonCode.push('PRESCRIPTION_INCOMPLETE');
-      return {
-        progression: 'repeat',
-        action: 'repeat',
-        reason: 'No se completó la prescripción (bloques): repeat. Un RPE bajo no compensa un entrenamiento incompleto.',
-        medicalNotice: false,
-        override: false,
-        reasonCode
-      };
-    }
-
-    if (!confidenceSufficient(conf)) {
-      reasonCode.push('LOW_CONFIDENCE');
-      return {
-        progression: 'repeat',
-        action: 'consolidate',
-        reason: 'Confianza baja o datos esenciales incompletos: no advance automático (repeat provisional).',
-        medicalNotice: false,
-        override: false,
-        reasonCode,
-        confidence: conf.confidence
-      };
-    }
-
-    if (hasSafetyAlert(log)) {
-      reasonCode.push('ALERT_PRESENT');
-      return {
-        progression: 'repeat',
-        action: 'repeat',
-        reason: 'Hay alerta (p. ej. molestia) sin override: el intento cuenta, progresión = repeat.',
-        medicalNotice: false,
-        override: false,
-        reasonCode
-      };
-    }
-
-    if (rpe <= 5) {
-      reasonCode.push('RPE_LE_5');
-      return {
-        progression: 'advance',
-        action: 'progress',
-        reason: 'Cumplido + RPE ≤5 + sin alertas + confianza suficiente: advance.',
-        medicalNotice: false,
-        override: false,
-        reasonCode,
-        confidence: conf.confidence
-      };
-    }
-
-    if (rpe === 6) {
-      const trend = recentTrendFavorable(priorLogs, plan);
-      if (trend.ok) {
-        reasonCode.push('RPE_6_TREND_OK');
-        return {
-          progression: 'advance',
-          action: 'progress',
-          reason: `Cumplido + RPE 6 + tendencia favorable: advance. ${trend.reason}`,
-          medicalNotice: false,
-          override: false,
-          caution: true,
-          reasonCode,
-          trend,
-          confidence: conf.confidence
-        };
-      }
-      reasonCode.push('RPE_6_TREND_BAD');
-      return {
-        progression: 'repeat',
-        action: 'consolidate',
-        reason: `Cumplido + RPE 6 + tendencia no favorable: repeat. ${trend.reason}`,
-        medicalNotice: false,
-        override: false,
-        reasonCode,
-        trend,
-        confidence: conf.confidence
-      };
-    }
-
-    reasonCode.push('RPE_GE_7');
-    return {
-      progression: 'repeat',
-      action: 'repeat',
-      reason: 'Cumplido + RPE ≥7: repeat. El entrenamiento queda registrado.',
-      medicalNotice: false,
-      override: false,
-      reasonCode,
-      confidence: conf.confidence
-    };
+    throw new Error('Motor de entrenamiento no disponible. Recargá antes de guardar.');
   }
 
-  /** @deprecated alias */
   function decideSafety(log, priorLogs = [], plan = null) {
     const d = decideProgression(log, priorLogs, plan);
     return {
@@ -1041,9 +885,18 @@
    * El historial/attempt permanece aunque progression sea repeat/recovery.
    */
   function confirmNextSession(plan, log, allLogs = []) {
+    const existing = plan.sessions.flatMap(s => s.attempts || []).find(a => a.logId === log.id);
+    if (existing) return { plan, attempt: existing, progression: existing.progression, action: existing.action, advanced: false, message: 'Este intento ya estaba guardado.', next: getFocusSession(plan) };
     const focusView = getFocusSession(plan);
-    const item = plan.sessions.find(s => s.id === log.planSessionId)
-      || getUnderlyingPlanItem(plan, focusView);
+    const item = log.planSessionId ? plan.sessions.find(s => s.id === log.planSessionId) : null;
+    log.createdAt = log.createdAt || new Date().toISOString();
+    log.attemptSequence = log.attemptSequence || Math.max(0, ...(allLogs || []).filter(l => l.id !== log.id && l.date === log.date).map(l => Number(l.attemptSequence) || 0)) + 1;
+    if (!item || item.kind !== 'run' || !['pending', 'rescheduled'].includes(item.status)) {
+      log.progression = null; log.action = log.adaptiveAction = 'record_only';
+      log.decisionReason = 'Guardamos lo realizado con su prescripción original. El plan actual cambió; este intento no modifica otra sesión.';
+      return { plan, advanced: false, action: 'record_only', progression: null, message: log.decisionReason, next: focusView, decision: { action: 'record_only', progression: null, reason: log.decisionReason } };
+    }
+    log.prescriptionSnapshot = log.prescriptionSnapshot || clone(item.structure);
     const messages = [];
 
     if (!item || item.kind === 'rest') {
@@ -1052,20 +905,28 @@
 
     if (!Array.isArray(item.attempts)) item.attempts = [];
 
+    if (Array.isArray(log.blocks) && log.blocks.length) {
+      log.prescriptionCompleted = window.PaceAdaptive.observedCompletion(log);
+      log.execution = log.prescriptionCompleted ? 'completed' : 'aborted';
+    }
     const priorLogs = (allLogs || []).filter(l => l.id !== log.id);
     const decision = decideProgression(log, priorLogs, plan);
     const execution = log.execution || 'completed';
     const prescriptionCompleted = log.prescriptionCompleted !== false && execution !== 'aborted';
 
-    const adaptiveAction = decision.adaptiveAction || decision.action || decision.progression;
+    let adaptiveAction = decision.adaptiveAction || decision.action || decision.progression;
     const speedSuggestion = window.PaceAdaptive
       ? window.PaceAdaptive.suggestSpeed([...(priorLogs || []), log], loadSettingsSoft(), plan)
       : null;
     if (speedSuggestion) plan.pendingSpeedSuggestion = speedSuggestion;
     const attempt = {
-      id: `att-${Date.now()}`,
+      id: `att-${log.id}`,
       logId: log.id,
       date: log.date,
+      createdAt: log.createdAt,
+      attemptSequence: log.attemptSequence,
+      blocks: log.blocks || null,
+      elapsedSec: log.elapsedSec ?? null,
       execution,
       prescriptionCompleted,
       progression: decision.progression,
@@ -1094,6 +955,8 @@
     log.adaptiveAction = adaptiveAction;
     log.action = adaptiveAction;
     log.reasonCode = decision.reasonCode || [];
+    log.decisionReason = decision.reason;
+    attempt.reason = decision.reason;
 
     messages.push(`Intento #${item.attempts.length}: ${execution}${prescriptionCompleted ? '' : ' · incompleto'} · ${adaptiveAction} (${decision.progression}).`);
     messages.push(decision.reason);
@@ -1145,6 +1008,14 @@
         : sortedPlanSessions(plan).find(s => isOpenStatus(s.status) && s.kind === 'run');
       if (nextRun?.structure) {
         explanation = window.PaceAdaptive.buildDiffMessage(prevStructure, nextRun.structure, decision);
+        if (explanation.sameLoad && adaptiveAction.startsWith('progress')) {
+          adaptiveAction = 'consolidate'; decision.action = 'consolidate'; decision.adaptiveAction = 'consolidate';
+          decision.reason = 'Completaste la sesión con buena tolerancia. Mantenemos la carga dentro de tu tiempo disponible y los límites de progresión. Podés revisar tus minutos disponibles en Ajustes.';
+          log.action = log.adaptiveAction = attempt.action = attempt.adaptiveAction = 'consolidate';
+          log.decisionReason = attempt.reason = decision.reason;
+          explanation.actionLabel = 'Consolidar'; nextRun.decisionAction = 'consolidate';
+          messages[1] = decision.reason;
+        }
         explanation.speedSuggestion = speedSuggestion;
         nextRun.changeSummary = explanation;
         nextRun.justification = decision.reason;
@@ -1288,6 +1159,7 @@
     const focusView = getFocusSession(plan);
     const focus = getUnderlyingPlanItem(plan, focusView);
     if (!focus) return { plan, message: 'Nada para omitir.' };
+    if (focus.blockedUntilRest) return { plan, message: 'Mantenemos la pausa: omitir no puede quitar la recuperación por síntomas.' };
     focus.status = 'skipped';
     focus.blockedUntilRest = false;
     if (!Array.isArray(focus.attempts)) focus.attempts = [];
@@ -1323,7 +1195,8 @@
     const previousDate = focus.scheduledDate || null;
     focus.scheduledDate = scheduledDate;
     focus.status = 'rescheduled';
-    focus.blockedUntilRest = false;
+    // Rescheduling changes only dates; prescription, attempts and safety gate remain.
+    window.PaceAdaptive.allocateScheduleDates(plan, window.PaceAdaptive.paramsOf(plan));
     console.info('[pace01] reschedule', { id: focus.id, previousDate, scheduledDate });
     return {
       plan,
@@ -1469,6 +1342,8 @@
     loadLogs,
     saveLogs,
     updateStoredLog,
+    reviewFutureAfterCorrection,
+    requestWalkToJog,
     getFocusSession,
     getUnderlyingPlanItem,
     sortedPlanSessions,

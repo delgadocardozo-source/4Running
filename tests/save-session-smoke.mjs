@@ -2,43 +2,16 @@
  * Smoke: cierre de sesión (manual + desde timer) debe persistir en localStorage.
  * node tests/save-session-smoke.mjs
  */
-import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
-import { extname, join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { chromium } from 'playwright';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = join(__dirname, '..');
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { startServer } from '../server.mjs';
 const port = 8771;
-const mime = {
-  '.html': 'text/html',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.jpg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webmanifest': 'application/manifest+json'
-};
-
-const server = createServer((req, res) => {
-  let url = req.url.split('?')[0];
-  if (url === '/') url = '/index.html';
-  const file = join(root, url.replace(/^\//, ''));
-  if (!file.startsWith(root) || !existsSync(file)) {
-    res.writeHash?.(404);
-    res.writeHead(404);
-    res.end('missing');
-    return;
-  }
-  res.writeHead(200, { 'Content-Type': mime[extname(file)] || 'text/plain' });
-  res.end(readFileSync(file));
-});
-
-await new Promise(r => server.listen(port, r));
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+const directory = await mkdtemp(join(tmpdir(), '4running-smoke-'));
+const app = await startServer({port, directory, testMail: true, migrate: true});
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: { Origin: `http://127.0.0.1:${port}` } });
 const errors = [];
 page.on('pageerror', e => errors.push(String(e)));
 page.on('console', msg => {
@@ -80,6 +53,11 @@ async function acceptLegalIfNeeded() {
 }
 
 async function completeOnboarding() {
+  await page.request.post(`http://127.0.0.1:${port}/api/auth/sign-out`, {data: {}});
+  const registered = await page.request.post(`http://127.0.0.1:${port}/api/auth/sign-up/email`, {data: {email: `smoke-${Date.now()}@example.com`, password: 'Smoke-running-12345', name: 'Smoke'}});
+  if (!registered.ok()) throw new Error(await registered.text());
+  await page.reload();
+  await page.locator('#legalDialog').waitFor({state: 'visible'});
   await acceptLegalIfNeeded();
   const dialog = page.locator('#onboardingDialog');
   await dialog.waitFor({ state: 'visible', timeout: 8000 });
@@ -129,24 +107,14 @@ try {
   await page.waitForTimeout(400);
   await completeOnboarding();
 
-  // Start workout briefly to get fromTimer path
-  const startHome = page.locator('#startWorkoutHome');
-  if (await startHome.isVisible()) {
-    await startHome.click();
-    await page.waitForTimeout(300);
-    // environment chooser?
-    const envTread = page.locator('#envTreadmill, [data-env="treadmill"], button:has-text("Cinta")').first();
-    if (await envTread.isVisible().catch(() => false)) {
-      await envTread.click();
-      await page.waitForTimeout(200);
-    }
-    const begin = page.locator('#beginWorkout, #startTimer, button:has-text("Empezar"), button:has-text("Comenzar")').first();
-    if (await begin.isVisible().catch(() => false)) await begin.click();
-    await page.waitForTimeout(400);
-  }
+  await page.locator('#startWorkoutHome').click();
+  await page.locator('[data-env="treadmill"]').click();
+  await page.locator('#beginWorkout').click();
+  await page.locator('#activeStage').waitFor({state: 'visible'});
+  await page.waitForTimeout(400);
 
   // Use finishAndSave from more panel
-  const more = page.locator('#moreToggle, #toggleMore, button:has-text("Más")').first();
+  const more = page.locator('#moreToggle, #toggleMore, button[aria-label="Más opciones"]').first();
   if (await more.isVisible().catch(() => false)) await more.click();
   const finish = page.locator('#finishAndSave');
   if (await finish.isVisible().catch(() => false)) {
@@ -170,7 +138,7 @@ try {
       results.push({ case: 'B-after-confirm', toast: await toastText(), dialogOpen: await page.locator('#sessionDialog').evaluate(d => d.open) });
     }
   } else {
-    results.push({ case: 'B-skipped', reason: 'finishAndSave not visible', html: await page.content().then(c => c.slice(0, 500)) });
+    throw new Error('finishAndSave not visible: timer branch must execute');
   }
 
   console.log(JSON.stringify({ results, errors }, null, 2));
@@ -180,5 +148,6 @@ try {
   process.exitCode = 1;
 } finally {
   await browser.close();
-  server.close();
+  await app.close();
+  await rm(directory,{recursive:true,force:true});
 }

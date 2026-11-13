@@ -1,84 +1,47 @@
-# PACE/01 — Motor adaptativo v4.1 (Fase 2)
+# 4Running — comportamiento actual
 
-Entrenador de running por intervalos (PWA). Evolución individual: caminar/trotar → carrera continua → 5K → rendimiento / 10K / mantenimiento.
+El producto responde tres preguntas: desde dónde empiezo, qué hago hoy y qué cambia después de correr.
 
-## 1. Resumen de cambios (Fase 2)
+## Flujo
 
-- Progresión multidimensional (`continuous` | `volume` | `performance` | `recovery` | `consistency`).
-- Acciones: `progress_continuous`, `progress_volume`, `progress_performance`, `consolidate`, `repeat`, `reduce`, `recovery`, `reassess`.
-- Escalera de continuo hasta 20–30+ min (no lista fija); fusión a carrera continua cuando corresponde.
-- Explicación continuo↑ / volumen↓ (no es pérdida de rendimiento).
-- Sugerencias de velocidad **con aceptación explícita** (nunca silenciosas).
-- Calendario con `scheduledDate`, descanso entre corridas, sin dos corridas el mismo día.
-- UX: recuperación “habilita el próximo”; confianza ≠ precaución.
-- Reloj de pruebas: `window.PaceTestClock`.
-- SW `pace01-v2.1.0`.
+Cuenta real → privacidad → onboarding en 4 pantallas → sesión concreta y motivo → selección cinta/exterior → cronómetro → esfuerzo, conversación y molestias → resultado observado y próxima decisión.
 
-## 2. Reglas deportivas y referencias
+El onboarding registra objetivo, actividad de cuatro semanas, capacidad continua declarada, tolerancia caminando, días/minutos disponibles, entorno y molestia limitante. Solo solicita fecha cuando hay una carrera. La evaluación es opcional; con molestias limitantes se pospone. Se pueden corregir respuestas conservando sesiones anteriores.
 
-| Referencia | Criterio usado | Qué no atribuimos |
-|------------|----------------|-------------------|
-| NHS Couch to 5K (UK) | Progresión gradual a continuo; ~3 sesiones/sem; consolidación | Calendario fijo de 9 semanas |
-| Jeff Galloway, Run Walk Run | Alternancia estratégica; caminatas no se eliminan solo por mejorar | Ratios propietarios exactos |
-| CDC Physical Activity Basics | RPE / talk test como intensidad práctica | FC obligatoria |
-| ACSM Guidelines (prescripción) | Individualización, progresión, FITT como marco | Umbrales clínicos exactos copiados |
-| Runna (docs públicas) | Adaptación a capacidad/pausas; pace insights como *idea de producto* | Algoritmos no públicos |
-| Garmin Run Coach (concepto público) | Personalización y recuperación | Lógica interna Garmin |
-| BJSM / gestión de carga | Precaución ante saltos bruscos de volumen/distancia | “Regla del 10%” como ley |
+## Evaluación
 
-**Decisiones 4Running (configurables en `plan.params` / `DEFAULT_PARAMS`):** paso continuo 15–30–60–120 s según nivel; tope ~15 % volumen carrera; ventana tendencia 3; pausa reevaluación 10 días; merge a continuo desde ~8 min o pocas reps.
+- Desconoce tolerancia: caminata de 15 minutos.
+- Camina cómodamente y quiere trotar: 5 min de caminata, 4 bloques de 30–60 s de trote y 90 s de caminata, 5 min de calma.
+- Ya corre: evaluación cómoda acorde a su capacidad y tiempo disponible.
+- Historial suficiente: puede usarse capacidad observada; si falta evidencia se informa y se mantiene provisional.
+- Siempre se puede pasar a caminata o terminar y guardar lo realizado.
 
-## 3. Arquitectura
+Tiempo de carrera observado significa tiempo del cronómetro en esa fase, no detección física de movimiento. Se registra conversación, RPE 0–10 y molestias; no se inventan datos faltantes.
 
-| Módulo | Rol |
-|--------|-----|
-| `adaptive-engine.js` | Perfil, candidatos, decisión, calendario, velocidad, diffs |
-| `coach-engine.js` | Persistencia, attempts, `confirmNextSession`, accept/reject speed |
-| `app.js` | UI adaptación, confianza/precaución, `PaceTestClock` |
-| `tests/fase2-evolution.test.js` | 8–12 sem + A–H + 14d |
+## Orden de decisión
 
-## 4. Archivos modificados
+1. Síntomas que empeoran, alteración de marcha, parada por síntomas o molestia relevante: recuperación.
+2. Intento incompleto sin alertas: misma prescripción.
+3. Datos esenciales ausentes/confianza explícitamente baja: propuesta provisional.
+4. Completa, RPE ≥7: repetir.
+5. Completa, RPE 6: avanzar únicamente con últimos tres intentos válidos, al menos dos completos ≤6, sin alertas ni deterioro.
+6. Completa, RPE ≤5 con evidencia suficiente: ajuste gradual desde la primera sesión.
 
-`adaptive-engine.js`, `coach-engine.js`, `app.js`, `index.html`, `styles.css`, `sw.js`, `PRODUCT.md`, `tests/*`.
+La única decisión es `PaceAdaptive.decideAdaptive`, coordinada por `PaceCoach.confirmNextSession`. Se guarda el motivo en el log y el intento. Hoy, vista breve del plan e Historial consumen el mismo estado.
 
-## 5. Progresión continua
+El continuo cómodo tiene prioridad. Se limita el volumen y el tiempo disponible, se mantiene la velocidad salvo aceptación y evidencia adecuada, y se explica el cambio. Si no hay candidato compatible se consolida con explicación. La capacidad declarada no acredita hitos. Completar 5K alternando no equivale a correr 2 km continuos.
 
-Prioridad principiantes: **continuo** antes que velocidad. Candidatos: +paso, reorganizar (−reps/+continuo), acortar caminata, fusionar a `walkSeconds:0 ×1`. Tope de volumen; si continuo↑ y volumen↓ → dimensión `continuous` con texto explícito.
+## Persistencia
 
-## 6. Velocidades
+Better Auth + cookies y servidor Node con SQLite persistente local. Estado por identidad comprobada en servidor. Revisión optimista, mutaciones idempotentes, unicidad de sesión por cuenta, cola local y conciliación explícita de conflictos. Importación heredada con confirmación de destino.
 
-`suggestSpeed()`: keep / suggest_up. No estima ritmo de carrera desde distancia total mixta. No escribe `settings.runSpeed` sin `acceptSpeedSuggestion`.
+El frontend sigue siendo JavaScript sin framework. El servidor ya es necesario: para Vercel se requiere adaptar la persistencia a una base remota. No hay despliegue autorizado.
 
-## 7. UX corregida
+## Verificación y límites
 
-- Recuperación: “habilitó el próximo entrenamiento” (no “no avanzó”).
-- Confianza = evidencia; Precaución = moderar carga; ambas visibles.
-- Diff con carrera acumulada + interpretación.
+Ver `AUDIT.md` y `README.md`. Se verifican suites, integración de cuentas y recorrido móvil automatizado. No se acredita audio con pantalla bloqueada ni dispositivo real. No hay GPS. Distancia y ritmos de segmentos estimados se señalan como tales y no justifican decisiones de velocidad.
 
-## 8. Calendario
 
-`allocateScheduleDates`: frecuencia/`minRestDaysBetweenRuns`; fechas en pendientes; reprogramar sigue siendo la misma sesión; tras pausa → `reassess`.
+## Revisión de consistencia 3.1
 
-## 9–12. Pruebas
-
-```bash
-node tests/adaptive-engine.test.js
-node tests/fase2-evolution.test.js
-```
-
-Escenario A (28 sesiones favorables): **hasta 20 min continuo** en simulación. B no progresa. F/G no vuelven a 2/2×7. Informes: `tests/fase2-scenario-a.json`, `tests/fase2-sim-14d.json`.
-
-## 13. Limitaciones
-
-- Sin GPS: segmentos de cinta no instrumentados → sugerencias de ritmo conservadoras.
-- Bloques mixtos heterogéneos: modelo listo (`blocks`), UI timer sigue en modo classic.
-- Prueba de 14 días “solo clic en navegador” automatizada vía misma API que la UI (`confirmNextSession` / `markRestComplete`); reloj `PaceTestClock` para UI manual.
-
-## 14. Verificar en interfaz
-
-1. Recargar (SW 2.1.0).
-2. Completar sesión RPE 3–4 → ver “Progresión de continuo” + interpretación si baja el volumen.
-3. Registrar recuperación → mensaje de habilitación.
-4. Historial: Confianza y Precaución separados.
-5. Consola (solo prueba): `PaceTestClock.setISO('2026-06-01')` para simular fechas.
-6. Si aparece sugerencia de velocidad, aceptar/rechazar; la config no cambia sola.
+Ver `FIXES.md`. El cronómetro usa tramos persistentes y el diario de sincronización usa operaciones en IndexedDB. Las ediciones conservan la decisión histórica y revisan solo lo futuro. Hoy ofrece una prueba corta de trote tras caminata cómoda con aceptación explícita. El calendario de dos o tres carreras es semanal; cuatro requiere acordar la alternativa de tres con descanso.

@@ -370,8 +370,8 @@ console.log('\n=== Ritmo de ciclo → sugerencia de velocidad ===');
     }
   }));
   const sug = A.suggestSpeed(paceLogs, { runSpeed: 7.5 }, plan);
-  assert(sug.action === 'suggest_up', 'paceMetrics atribuido puede sugerir subir');
-  assert(sug.reasonCode.includes('SPEED_SUGGEST_FROM_CYCLE_PACE'), 'usa ritmo de ciclo');
+  assert(sug.action === 'keep', 'reparto estimado no habilita subir velocidad');
+  assert(!sug.reasonCode.includes('SPEED_SUGGEST_FROM_CYCLE_PACE'), 'no usa distancia mixta para sugerir ritmo de carrera');
 }
 
 console.log('\n=== Test de control en horizonte ===');
@@ -432,7 +432,7 @@ console.log('\n=== Onboarding / intake → estructura inicial ===');
   }, {});
   assert(none.intake.intakeStage === 1, 'solo camino + molestia → stage 1');
   const nRun = none.sessions.find(s => s.kind === 'run');
-  assert(nRun && nRun.structure.runSeconds === 30, 'nivel none: bloques muy cortos');
+  assert(nRun && nRun.structure.runSeconds === 0 && nRun.blockedUntilRest, 'molestia limitante: evaluación pospuesta, sin prescribir carrera');
 
   const pendingBefore = (beginner.sessions || []).filter(s =>
     s.kind === 'run' && (s.status === 'pending' || s.status === 'rescheduled')

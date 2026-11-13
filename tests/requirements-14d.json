@@ -1,0 +1,100 @@
+[
+  {
+    "date": "2026-11-11",
+    "before": "1 min correr / 2 min caminar ×6",
+    "result": "completed",
+    "rpe": 4,
+    "decision": "advance",
+    "next": "1:09 correr / 2 min caminar ×6",
+    "reason": "Completaste todos los bloques con esfuerzo cómodo. Aumentamos gradualmente el tiempo de carrera."
+  },
+  {
+    "date": "2026-11-12",
+    "result": "recovery",
+    "next": "run-1794601703934-3"
+  },
+  {
+    "date": "2026-11-13",
+    "before": "1:09 correr / 2 min caminar ×6",
+    "result": "completed",
+    "rpe": 8,
+    "decision": "repeat",
+    "next": "1:09 correr / 2 min caminar ×6",
+    "reason": "Completaste la sesión. La próxima mantiene los mismos intervalos por el esfuerzo registrado (7/10 o más)."
+  },
+  {
+    "date": "2026-11-14",
+    "result": "rest day",
+    "next": "run-1794601703934-3"
+  },
+  {
+    "date": "2026-11-15",
+    "before": "1:09 correr / 2 min caminar ×6",
+    "result": "aborted",
+    "rpe": 4,
+    "decision": "repeat",
+    "next": "1:09 correr / 2 min caminar ×6",
+    "reason": "Guardamos lo realizado. La próxima mantiene los mismos intervalos porque quedaron bloques incompletos."
+  },
+  {
+    "date": "2026-11-16",
+    "result": "rest day",
+    "next": "run-1794601703934-3"
+  },
+  {
+    "date": "2026-11-17",
+    "before": "1:09 correr / 2 min caminar ×6",
+    "result": "completed",
+    "rpe": 4,
+    "decision": "advance",
+    "next": "1:19 correr / 2 min caminar ×6",
+    "reason": "Completaste todos los bloques con esfuerzo cómodo. Aumentamos gradualmente el tiempo de carrera."
+  },
+  {
+    "date": "2026-11-18",
+    "result": "recovery",
+    "next": "run-1794601703937-5"
+  },
+  {
+    "date": "2026-11-19",
+    "before": "1:19 correr / 2 min caminar ×6",
+    "result": "completed",
+    "rpe": 5,
+    "decision": "advance",
+    "next": "1:34 correr / 2 min caminar ×5",
+    "reason": "Completaste todos los bloques con esfuerzo cómodo. Aumentamos gradualmente el tiempo de carrera."
+  },
+  {
+    "date": "2026-11-20",
+    "result": "recovery",
+    "next": "run-1794601703938-7"
+  },
+  {
+    "date": "2026-11-21",
+    "before": "1:34 correr / 2 min caminar ×5",
+    "result": "completed",
+    "rpe": 3,
+    "decision": "recovery",
+    "next": "1:34 correr / 2 min caminar ×5",
+    "reason": "Suspendemos la progresión. No vuelvas a correr con síntomas que empeoran o alteran tu marcha; revisá la molestia antes de retomar."
+  },
+  {
+    "date": "2026-11-22",
+    "result": "recovery",
+    "next": "run-1794601703938-7"
+  },
+  {
+    "date": "2026-11-23",
+    "before": "1:34 correr / 2 min caminar ×5",
+    "result": "completed",
+    "rpe": 4,
+    "decision": "advance",
+    "next": "1:48 correr / 2 min caminar ×5",
+    "reason": "Completaste todos los bloques con esfuerzo cómodo. Aumentamos gradualmente el tiempo de carrera."
+  },
+  {
+    "date": "2026-11-24",
+    "result": "recovery",
+    "next": "run-1794601703940-9"
+  }
+]

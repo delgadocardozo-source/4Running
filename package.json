@@ -1,0 +1,27 @@
+{
+  "name": "4running",
+  "version": "3.1.0",
+  "description": "4Running: entrenamiento gradual, cuentas y seguimiento para empezar a correr.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node tests/workout-runtime.test.cjs && node tests/adaptive-engine.test.js && node tests/fase2-evolution.test.js && node tests/requirements.test.cjs && node tests/training-regressions.test.cjs && node tests/accounts.test.mjs",
+    "test:browser": "node tests/journey.mjs",
+    "db:migrate": "node server.mjs migrate"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/delgadocardozo-source/4Running.git"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "better-auth": "^1.7.21",
+    "better-sqlite3": "^13.1.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.0"
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "private": true
+}

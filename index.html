@@ -5,34 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#07080d" />
   <meta name="color-scheme" content="dark" />
-  <meta name="description" content="PACE/01 — entrenador de running minimalista con intervalos, historial y preparación para carrera." />
+  <meta name="description" content="4Running — entrenador de running minimalista con intervalos, historial y preparación para carrera." />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="PACE/01" />
+  <meta name="apple-mobile-web-app-title" content="4Running" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon-180.png" />
-  <title>PACE/01</title>
+  <title>4Running</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <section id="authGate" class="auth-gate" hidden aria-label="Acceso a 4Running">
+    <form id="authForm" class="auth-card">
+      <p class="eyebrow">4RUNNING · TU PRIMER PASO</p>
+      <h1>Empezá a tu ritmo.</h1>
+      <p>Un entrenamiento para hoy. Un plan que aprende de vos.</p>
+      <div id="authFields">
+        <label>Correo electrónico<input id="authEmail" type="email" autocomplete="email"></label>
+        <label>Contraseña · mínimo 12 caracteres<input id="authPassword" type="password" autocomplete="current-password" minlength="12"></label>
+        <button class="primary-button accent-button" name="action" value="register">Crear cuenta</button>
+        <button class="quiet-button" name="action" value="login">Iniciar sesión</button>
+        <button class="quiet-button" name="action" value="recover" formnovalidate>Recuperar acceso</button>
+      </div>
+      <div id="resetFields" hidden><label>Nueva contraseña<input id="newPassword" type="password" minlength="12" autocomplete="new-password"></label><button class="primary-button" value="reset">Guardar contraseña</button></div>
+      <p id="authError" role="status"></p>
+      <small>Tu perfil e historial quedan asociados a tu cuenta.</small>
+    </form>
+  </section>
+  <div class="app-shell" hidden>
     <header class="topbar">
-      <button class="brand" data-nav="home" aria-label="Ir al inicio">PACE/01</button>
+      <button class="brand" data-nav="home" aria-label="Ir al inicio">4Running</button>
       <div class="race-corner" aria-label="Objetivo" id="raceCorner">
         <span id="raceCornerEyebrow">Objetivo</span>
         <strong id="raceDateLabel">—</strong>
         <em id="raceCornerSub"><b id="daysToRace">—</b> días</em>
       </div>
       <span class="sr-only" id="todayLabel">Hoy</span>
-      <button class="icon-button" id="installButton" aria-label="Instalar PACE/01" title="Instalar app" hidden>
+      <button class="icon-button" id="installButton" aria-label="Instalar 4Running" title="Instalar app" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
       </button>
     </header>
 
     <main id="app" tabindex="-1">
       <section class="view is-active" id="view-home" data-view="home">
+        <details class="cloud-card" id="planOverview"><summary>Tu plan · próximas sesiones</summary><ol id="planOverviewList"></ol></details>
+        <aside id="walkToJogCard" class="cloud-card" hidden><p id="walkToJogMessage"></p><button type="button" id="tryJogAssessment" class="primary-button">Probar trote corto</button></aside>
+        <p id="scheduleNotice" class="field-hint" hidden></p>
         <div id="todayRun">
+          <p id="sessionWhy" class="session-why"></p>
           <div class="home-hero">
             <div class="home-hero-media" aria-hidden="true"></div>
             <div class="home-hero-copy">
@@ -191,6 +212,7 @@
             </li>
           </ul>
           <button type="button" class="quiet-button prep-test" id="testAlerts">Probar alertas</button>
+          <p class="field-hint">Mantené la pantalla activa: si el teléfono suspende la app al bloquearse, no podemos garantizar sonido ni voz. Al volver, el reloj se pondrá al día; los avisos perdidos no se repetirán juntos.</p>
           <button type="button" class="primary-button accent-button today-start" id="beginWorkout">Comenzar</button>
         </div>
 
@@ -217,6 +239,8 @@
           </div>
           <div class="transport">
             <button class="transport-side" id="minusThirty" type="button">−30 s</button>
+            <button class="quiet-button" id="walkNow" type="button">Pasar a caminata</button>
+            <button class="quiet-button" id="stopNow" type="button">Terminar y guardar</button>
             <button class="pause-button" id="mainTimerButton" type="button">Pausa</button>
             <button class="transport-side" id="plusThirty" type="button">+30 s</button>
           </div>
@@ -263,6 +287,8 @@
       </section>
 
       <section class="view" id="view-settings" data-view="settings">
+        <article class="settings-card cloud-card"><p class="eyebrow">Tu cuenta</p><strong id="cloudEmail"></strong><p id="syncStatus" role="status">Conectando…</p><button type="button" class="quiet-button" id="retrySync">Reintentar sincronización</button><button type="button" class="quiet-button" id="importLegacy" hidden>Importar datos de este dispositivo</button><button type="button" class="quiet-button" id="resolveSync" hidden>Resolver cambios entre dispositivos</button><button type="button" class="quiet-button" id="logout">Cerrar sesión</button></article>
+
         <div class="page-heading">
           <p class="eyebrow">Ajustes</p>
           <h1>Preferencias</h1>
@@ -325,7 +351,7 @@
               <input type="checkbox" id="remindersToggle">
             </label>
             <button class="quiet-button" type="button" id="enableRemindersBtn">Activar notificaciones</button>
-            <p class="setting-note" id="accountIdNote">ID local: —</p>
+            <p class="setting-note" id="accountIdNote">Perfil de entrenamiento</p>
           </div>
           <div class="settings-block" id="speedsSettingsBlock">
             <p class="metric-label">Velocidades (cinta)</p>
@@ -366,7 +392,7 @@
           </div>
           <div class="settings-block backup-block">
             <p class="metric-label">Respaldo y sync</p>
-            <p class="setting-note">Sin cuenta en la nube todavía: el «paquete de sync» te permite pasar plan + historial a otro teléfono.</p>
+            <p class="setting-note">Tu cuenta sincroniza perfil, plan e historial. Exportá un respaldo si querés guardar una copia adicional.</p>
             <button class="primary-button" type="button" id="exportHistory">Exportar respaldo</button>
             <button class="quiet-button" type="button" id="exportSyncPack">Exportar paquete de sync</button>
             <button class="quiet-button" type="button" id="restoreHistory">Restaurar / importar sync</button>
@@ -381,8 +407,7 @@
           <div class="settings-block">
             <p class="metric-label">Cuenta / plan</p>
             <button class="quiet-button" type="button" id="redoOnboarding">Rehacer onboarding</button>
-            <button class="quiet-button" type="button" id="loadDemoData">Cargar datos de demo</button>
-            <p class="setting-note">La demo reemplaza tu plan e historial actuales.</p>
+            <p class="setting-note">Las demostraciones se ejecutan en entornos de prueba separados de tu cuenta.</p>
           </div>
         </form>
       </section>
@@ -444,6 +469,7 @@
           </div>
           <p class="step-question">Esfuerzo (RPE)</p>
           <div class="choice-row rpe-grid" id="rpeChoices">
+            <label><input type="radio" name="sessionRpe" value="0"> 0</label>
             <label><input type="radio" name="sessionRpe" value="1"> 1</label>
             <label><input type="radio" name="sessionRpe" value="2"> 2</label>
             <label><input type="radio" name="sessionRpe" value="3"> 3</label>
@@ -470,7 +496,7 @@
               <label class="check-row"><input type="checkbox" id="flagForcedStop"> Tuviste que frenar</label>
               <label class="check-row warn-check"><input type="checkbox" id="flagSevere"> Dolor fuerte, súbito o síntomas neurológicos</label>
             </fieldset>
-            <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.</p>
+            <p class="field-hint" id="severeHint" hidden>Si marcás la última opción: suspendé el entrenamiento y considerá evaluación profesional. 4Running no diagnostica.</p>
           </div>
         </section>
 
@@ -519,6 +545,9 @@
             </div>
             <p class="field-hint">Esto describe tu margen. No suma minutos al tiempo continuo.</p>
           </fieldset>
+          <label id="manualContinuousWrap">Mayor tramo de carrera continuo observado · segundos<input id="manualContinuous" type="number" min="0" max="14400" step="1" placeholder="No sé / sin medir"><small>Opcional. Si no lo mediste, queda sin confirmar y el plan se mantiene provisional.</small></label>
+          <label>¿Podías conversar?<select id="sessionTalk"><option value="unknown">No sé</option><option value="yes">Sí, frases completas</option><option value="no">No, me faltaba el aire</option></select></label>
+          <p id="observedSummary" class="field-hint"></p>
           <label>Notas<input type="text" id="sessionNotes" placeholder="Opcional"></label>
         </section>
       </div>
@@ -559,15 +588,15 @@
         <div><span>Distancia</span><strong id="adaptDistance">—</strong></div>
         <div><span>Esfuerzo</span><strong id="adaptEffort">—</strong><small id="adaptEffortNote"></small></div>
       </div>
-      <div class="adapt-pace-panel" id="adaptPacePanel" hidden>
-        <p class="metric-label">Métricas de ritmo</p>
+      <details class="adapt-pace-panel" id="adaptPacePanel" hidden>
+        <summary>Ver estimaciones de ritmo</summary>
         <div class="finish-stats adapt-pace-stats">
           <div><span>Ritmo ciclo</span><strong id="adaptCyclePace">—</strong><small id="adaptCyclePaceNote"></small></div>
           <div><span>Ritmo carrera</span><strong id="adaptRunPace">—</strong><small id="adaptRunPaceNote"></small></div>
           <div><span>Vel. media ciclo</span><strong id="adaptCycleSpeed">—</strong><small>sin warm/cool</small></div>
         </div>
         <p class="field-hint" id="adaptPaceHint"></p>
-      </div>
+      </details>
       <p class="adapt-place" id="adaptPlace"></p>
       <p class="metric-label">Lo que haremos ahora</p>
       <div class="adapt-action" id="adaptAction"></div>
@@ -596,6 +625,10 @@
     </form>
   </dialog>
 
+  <dialog id="workoutRecoveryDialog" class="modal"><div class="modal-card"><h2>Tu sesión sigue guardada</h2><p id="recoverySummary"></p><div class="modal-actions"><button type="button" id="resumeRecovered" class="primary-button">Retomar sesión</button><button type="button" id="saveRecovered" class="quiet-button">Terminar y guardar lo realizado</button></div></div></dialog>
+  <dialog id="logoutPendingDialog" class="modal"><form method="dialog" class="modal-card"><h2>Hay cambios guardados en este dispositivo</h2><p>Podés salir y conservarlos para sincronizarlos al volver a ingresar en esta cuenta, desde este mismo navegador. Todavía no estarán disponibles en otro dispositivo.</p><button class="quiet-button">Volver</button><button type="button" id="logoutKeepPending" class="primary-button">Conservar cambios y salir</button></form></dialog>
+  <dialog id="syncConflictDialog" class="modal"><form method="dialog" class="modal-card"><h2>Hay cambios en otro dispositivo</h2><p>Para proteger ambos registros, descargá primero tu copia local. Después podés recuperar la versión de tu cuenta e importar los intentos que falten desde Ajustes.</p><button type="button" id="downloadPending" class="quiet-button">Descargar copia local</button><button id="useRemote" type="button" class="primary-button" disabled>Usar versión de mi cuenta</button><button class="quiet-button">Volver</button></form></dialog>
+  <dialog id="importDialog" class="modal"><form method="dialog" class="modal-card"><h2>Importar historial local</h2><p>¿Querés asociar los datos anteriores de este dispositivo a <strong id="importAccount"></strong>? Los registros con el mismo identificador no se duplican.</p><button class="quiet-button">Cancelar</button><button type="button" class="primary-button" id="confirmImport">Sí, importar a esta cuenta</button></form></dialog>
   <dialog id="confirmDialog" class="modal">
     <form method="dialog" class="modal-card" id="confirmForm">
       <h2 id="confirmTitle">Confirmar</h2>
@@ -612,7 +645,7 @@
       <div class="modal-scroll">
         <div class="modal-heading">
           <div>
-            <span class="eyebrow">PACE/01</span>
+            <span class="eyebrow">4Running</span>
             <h2 id="onboardTitle">Tu punto de partida</h2>
           </div>
         </div>
@@ -635,10 +668,13 @@
         </section>
 
         <section data-onboard-step="2" hidden>
+          <label>Actividad en las últimas 4 semanas<select id="onboardActivity"><option value="unknown">No sé / irregular</option><option value="none">Muy poca actividad</option><option value="walk">Caminatas habituales</option><option value="run">Corro regularmente</option></select></label>
+          <label>¿Cuánto caminás cómodamente seguido?<select id="onboardWalk"><option value="unknown">No sé</option><option value="short">Menos de 15 minutos</option><option value="15">15 minutos</option><option value="30">30 minutos o más</option></select></label>
           <p class="step-question">¿Cuánto podés correr seguido hoy, sin caminar?</p>
           <div class="choice-row wrap onboard-choices">
+            <label><input type="radio" name="onboardAbility" value="unknown" checked> No sé</label>
             <label><input type="radio" name="onboardAbility" value="none"> Casi nada / solo camino</label>
-            <label><input type="radio" name="onboardAbility" value="1min" checked> 1–2 min</label>
+            <label><input type="radio" name="onboardAbility" value="1min"> 1–2 min</label>
             <label><input type="radio" name="onboardAbility" value="5min"> ~5 min</label>
             <label><input type="radio" name="onboardAbility" value="15min"> ~15 min</label>
             <label><input type="radio" name="onboardAbility" value="30min"> ~30 min</label>
@@ -648,6 +684,7 @@
         </section>
 
         <section data-onboard-step="3" hidden>
+          <label>Minutos disponibles por sesión<select id="onboardMinutes"><option value="15">15 minutos</option><option value="20">20 minutos</option><option value="30" selected>30 minutos</option><option value="45">45 minutos</option><option value="60">60 minutos</option></select></label>
           <p class="step-question">¿Cuántos días por semana querés entrenar?</p>
           <div class="choice-row choice-large">
             <label><input type="radio" name="onboardDays" value="2"> 2</label>
@@ -669,7 +706,7 @@
         </section>
 
         <section data-onboard-step="4" hidden>
-          <p class="step-question">¿Tenés alguna molestia ahora?</p>
+          <p class="step-question">¿Alguna molestia actual limita tu actividad?</p>
           <div class="choice-row choice-large">
             <label><input type="radio" name="onboardPain" value="no" checked> No</label>
             <label><input type="radio" name="onboardPain" value="yes"> Sí</label>
@@ -677,9 +714,12 @@
           <label id="onboardPainNoteWrap" hidden>¿Dónde?
             <input type="text" id="onboardPainNote" placeholder="Ej. rodilla derecha">
           </label>
-          <label>Fecha objetivo (opcional)
+          <label><input type="checkbox" id="onboardHasRace"> Tengo una carrera objetivo</label>
+          <label id="raceDateWrap" hidden>Fecha de la carrera
             <input type="date" id="onboardRaceDate">
           </label>
+          <label>Evaluación inicial · opcional<select id="onboardAssessment"><option value="later">Evaluar después · plan provisional</option><option value="walk">Caminata cómoda guiada · 15 min</option><option value="jog">Camino cómodo y quiero probar trote · 4 bloques cortos</option><option value="run">Ya corro · evaluación fácil según mi nivel</option><option value="history">Partir de mi historial observado</option></select></label>
+          <p id="assessmentHint" class="field-hint">Podés caminar o terminar y guardar en cualquier momento. Con una molestia limitante posponemos la evaluación.</p>
           <div class="session-metrics-preview" id="onboardPreview">
             <p class="metric-label">Tu primera sesión</p>
             <p id="onboardPreviewBody">—</p>
@@ -720,10 +760,10 @@
       <p class="eyebrow">Antes de seguir</p>
       <h2>Privacidad y salud</h2>
       <div class="legal-copy">
-        <p>PACE/01 guarda tu plan e historial <strong>en este dispositivo</strong>. No hay cuenta en la nube todavía: si borrás el navegador, podés perder datos. Exportá respaldos desde Ajustes.</p>
-        <p>Esta app orienta entrenamientos de running con reglas conservadoras. <strong>No diagnostica ni reemplaza consejo médico</strong>. Con dolor fuerte, mareos o síntomas neurológicos, paramí y consultá a un profesional.</p>
+        <p>4Running guarda tu perfil, plan e historial <strong>en tu cuenta</strong> y mantiene una copia local para sincronizar cambios. Incluye el esfuerzo y las molestias que registres. Revisá el estado de sincronización antes de cambiar de dispositivo.</p>
+        <p>Esta app orienta entrenamientos de running con reglas conservadoras. <strong>No diagnostica ni reemplaza consejo médico</strong>. Con dolor fuerte, mareos o síntomas neurológicos, pará y consultá a un profesional.</p>
       </div>
-      <label class="check-row"><input type="checkbox" id="legalPrivacyCheck"> Entiendo el almacenamiento local y la privacidad</label>
+      <label class="check-row"><input type="checkbox" id="legalPrivacyCheck"> Entiendo cómo se guardan mis datos y la privacidad</label>
       <label class="check-row"><input type="checkbox" id="legalMedicalCheck"> Entiendo que no es consejo médico</label>
       <div class="modal-actions">
         <button class="primary-button accent-button" type="button" id="legalAcceptBtn">Continuar</button>
@@ -740,11 +780,11 @@
         </div>
         <button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button>
       </div>
-      <p class="field-hint">Corrige tiempo, distancia o esfuerzo. No reescribe la decisión del plan ya aplicada.</p>
+      <p class="field-hint">La decisión original queda auditada. Si cambian datos del entrenamiento, revisamos solo las sesiones futuras y te explicamos el ajuste.</p>
       <input type="hidden" id="editLogId" value="">
       <label>Tiempo<input type="text" id="editLogTime" inputmode="numeric" placeholder="38:12"></label>
       <label>Distancia (km)<input type="number" id="editLogDistance" step="0.01" min="0" inputmode="decimal"></label>
-      <label>RPE<input type="number" id="editLogRpe" min="1" max="10" step="1"></label>
+      <label>RPE<input type="number" id="editLogRpe" min="0" max="10" step="1"></label>
       <label>Notas<input type="text" id="editLogNotes" placeholder="Opcional"></label>
       <div class="modal-actions">
         <button class="quiet-button" type="button" data-close-dialog>Cancelar</button>
@@ -756,6 +796,8 @@
   <script src="adaptive-engine.js" defer></script>
   <script src="coach-engine.js" defer></script>
   <script src="product.js" defer></script>
+  <script src="cloud.js" defer></script>
+  <script src="workout-runtime.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

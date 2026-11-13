@@ -1,16 +1,18 @@
-# PACE/01 v1.3 — Review Notes
+# Revisión local de 4Running
 
-Ver `PRODUCT.md` (especificación).
+Consultar `FIXES.md` para la revisión posterior y `AUDIT.md` para la auditoría inicial.
 
-## Separación clave
-- Ejecución: `completed | aborted | skipped`
-- Progresión: `advance | repeat | recovery`
-- Cada `PlanItem` tiene `attempts[]`. Un RPE 7 completed + repeat **no borra** el entrenamiento.
+```bash
+npm ci --cache /tmp/4running-npm-cache
+npm test
+npm run test:browser
+node tests/save-session-smoke.mjs
+node tests/runtime-browser-regressions.mjs
+node tests/sync-regressions.mjs
+```
 
-## Checklist manual
-1. Completar cierre con RPE 7 sin dolor → historial `ejec. completed` + `prog. repeat`; Home sigue en la misma sesión; attempts = 1.
-2. Segundo cierre RPE 4 sin dolor → `advance`; cursor a recuperación.
-3. RPE 6 con historial limpio → advance; con tendencia mala → repeat.
-4. Marcar “fue empeorando” → recovery + gate, aunque RPE sea 4.
-5. Reprogramar no duplica id.
-6. Distancia estimada hasta confirmar.
+Las pruebas usan cuentas y bases temporales. No ejecutan despliegues ni migraciones de producción.
+
+Casos principales: identidad validada en servidor; aislamiento; reintento tras respuesta perdida; importación repetida; conflicto entre dispositivos; historial conservado al corregir respuestas; aviso 5–4–3–2–1; transición independiente de voz; evaluación y entrenamiento con el mismo reloj; incompleta y RPE alto repiten; señales de seguridad prevalecen; reprogramar no quita recuperación; abrir el calendario no mueve fechas; 14 días calendario con próxima acción.
+
+SQLite es el adaptador local/persistente de un servidor Node, no una solución para el filesystem efímero de Vercel. Correo real, base remota, despliegue y pruebas físicas permanecen pendientes explícitos.
