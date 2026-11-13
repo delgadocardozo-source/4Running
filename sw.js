@@ -1,9 +1,11 @@
-const CACHE = 'pace01-v2.3.3';
+const CACHE = '4running-v3.1.0';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './workout-runtime.js',
+  './cloud.js',
   './adaptive-engine.js',
   './coach-engine.js',
   './product.js',
@@ -32,7 +34,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   // JS/CSS/HTML: red primero para no quedar atrapados en un beep roto.
   const networkFirst = /\.(?:js|css|html|webmanifest)$/.test(url.pathname)

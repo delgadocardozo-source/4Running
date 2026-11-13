@@ -4,7 +4,7 @@
  * Referencias y parámetros propios: PRODUCT.md
  */
 (() => {
-  const ENGINE_VERSION = '4.3.2';
+  const ENGINE_VERSION = '4.4.0';
 
   /** Catálogo de objetivos de producto (intake + ajustes). */
   const GOAL_CATALOG = {
@@ -20,6 +20,7 @@
    * No sustituye evidencia real: los logs ganan cuando existen.
    */
   const CONTINUOUS_ABILITY = {
+    unknown: { key: 'unknown', stage: 1, demonstratedSec: 0, label: 'Tolerancia por observar' },
     none: { key: 'none', stage: 1, demonstratedSec: 0, label: 'Casi no corro / solo camino' },
     '1min': { key: '1min', stage: 2, demonstratedSec: 90, label: 'Hasta 1–2 min seguidos' },
     '5min': { key: '5min', stage: 3, demonstratedSec: 5 * 60, label: 'Hasta ~5 min seguidos' },
@@ -118,7 +119,7 @@
       mode: st.mode || 'classic',
       warmSeconds: Number(st.warmSeconds) || DEFAULT_PARAMS.warmSeconds,
       coolSeconds: Number(st.coolSeconds) || DEFAULT_PARAMS.coolSeconds,
-      runSeconds: Number(st.runSeconds) || 120,
+      runSeconds: st.runSeconds == null ? 120 : Math.max(0, Number(st.runSeconds) || 0),
       walkSeconds: Number.isFinite(walkSeconds) ? walkSeconds : DEFAULT_PARAMS.defaultWalkSeconds,
       reps: Number(st.reps) || 7,
       blocks: Array.isArray(st.blocks) ? st.blocks : null
@@ -186,6 +187,7 @@
     if (s.blocks && s.blocks.length) {
       return s.blocks.map(b => `${formatBlockSec(b.seconds)} ${b.type === 'run' ? 'correr' : 'caminar'}`).join(' · ');
     }
+    if (s.runSeconds === 0) return `${formatBlockSec(s.walkSeconds * s.reps)} caminata cómoda + calentamiento y vuelta a la calma`;
     if (!s.walkSeconds) {
       return s.reps === 1
         ? `${formatBlockSec(s.runSeconds)} carrera continua`
@@ -301,12 +303,64 @@
     };
   }
 
+  function compareAttemptRecency(a, b) {
+    const day = String(b.date || '').localeCompare(String(a.date || ''));
+    if (day) return day;
+    const timeA = Date.parse(a.createdAt || a.startedAt || '') || 0;
+    const timeB = Date.parse(b.createdAt || b.startedAt || '') || 0;
+    return timeB - timeA || (Number(b.attemptSequence) || 0) - (Number(a.attemptSequence) || 0);
+  }
+
   function validTrainingLogs(logs = []) {
-    return (logs || [])
-      .filter(isRunLog)
-      .filter(l => !isExternal(l))
-      .slice()
-      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.id).localeCompare(String(a.id)));
+    return (logs || []).map((log, index) => ({ log, index }))
+      .filter(({ log }) => isRunLog(log) && !isExternal(log))
+      .sort((a, b) => compareAttemptRecency(a.log, b.log) || b.index - a.index)
+      .map(({ log }) => log);
+  }
+
+  function durationOfLog(log) {
+    if (log.elapsedSec != null && log.elapsedSec !== '') return Number(log.elapsedSec);
+    if (!log.time) return null;
+    const parts = String(log.time).split(':').map(Number);
+    if (parts.some(n => !Number.isFinite(n) || n < 0)) return NaN;
+    return parts.reduce((sum, n) => sum * 60 + n, 0);
+  }
+
+  function evidenceForLog(log) {
+    const errors = [];
+    const rpe = log.rpe == null || log.rpe === '' ? NaN : Number(log.rpe);
+    const continuous = log.maxRunBlockSec == null || log.maxRunBlockSec === '' ? NaN : Number(log.maxRunBlockSec);
+    const elapsed = durationOfLog(log);
+    if (!Number.isFinite(rpe) || rpe < 0 || rpe > 10) errors.push('Esfuerzo sin confirmar o fuera de 0–10.');
+    if (typeof log.pain !== 'boolean') errors.push('Molestias sin confirmar.');
+    if (!Number.isFinite(continuous) || continuous < 0 || continuous > 14400) errors.push('Tiempo continuo sin confirmar o fuera de rango.');
+    if (elapsed != null && (!Number.isFinite(elapsed) || elapsed <= 0 || continuous > elapsed + 1)) errors.push('El continuo no es coherente con la duración registrada.');
+    const blocks = Array.isArray(log.blocks) ? log.blocks : [];
+    if (log.source === 'timer' && !blocks.length) errors.push('Faltan los bloques observados del cronómetro.');
+    let observedMax = 0;
+    let observedTotal = 0;
+    for (const block of blocks) {
+      const actual = Number(block.actualSeconds);
+      const prescribed = Number(block.prescribedSeconds);
+      const run = block.runSeconds != null ? Number(block.runSeconds) : block.type === 'run' ? actual : 0;
+      const longest = block.longestRunSeconds != null ? Number(block.longestRunSeconds) : run;
+      if (![actual, prescribed, run, longest].every(Number.isFinite) || actual < 0 || prescribed <= 0 || run < 0 || run > actual + 1 || longest < 0 || longest > run + 1) errors.push('Bloques observados incoherentes.');
+      observedTotal += Number.isFinite(actual) ? actual : 0;
+      observedMax = Math.max(observedMax, Number.isFinite(longest) ? longest : 0);
+    }
+    if (blocks.length && continuous > observedMax + 1) errors.push('El continuo supera los tramos corridos observados.');
+    if (blocks.length && elapsed != null && Math.abs(observedTotal - elapsed) > Math.max(2, blocks.length * 0.25)) errors.push('La duración no coincide con los bloques observados.');
+    if (log.confidence === 'low' || log.confidence === 'baja') errors.push('El registro sigue siendo provisional.');
+    return { sufficient: errors.length === 0, errors, rpe, continuous, elapsed, observedMax };
+  }
+
+  function trainingConfidence(logs = [], plan = null) {
+    const valid = validTrainingLogs(logs);
+    const complete = valid.filter(log => observedCompletion(log) && evidenceForLog(log).sufficient);
+    const latest = valid[0];
+    if (!latest || !evidenceForLog(latest).sufficient || !complete.length) return { confidence: 'baja', confidenceLabel: 'Confianza baja', note: 'Datos esenciales incompletos o incoherentes: la propuesta sigue siendo provisional.' };
+    if (complete.length >= 4 && valid.slice(0, 3).every(log => evidenceForLog(log).sufficient)) return { confidence: 'alta', confidenceLabel: 'Confianza alta', note: 'Registros completos, coherentes y suficientes para evaluar la evolución reciente.' };
+    return { confidence: 'media', confidenceLabel: 'Confianza media', note: 'Una sesión con esfuerzo, cumplimiento y continuo observado permite un ajuste gradual; la tendencia aún es provisional.' };
   }
 
   function daysBetween(isoA, isoB) {
@@ -378,15 +432,13 @@
     const valid = validTrainingLogs(logs);
     const completed = valid.filter(l => l.prescriptionCompleted !== false && l.execution !== 'aborted');
     const withRpe = completed.filter(l => l.rpe != null);
-    const continuous = completed
+    const continuous = valid.filter(l => evidenceForLog(l).sufficient)
       .map(l => Number(l.maxRunBlockSec) || 0)
       .filter(n => n > 0);
     const fromLogs = continuous.length ? Math.max(...continuous) : null;
     const declaredSec = plan?.intake?.declaredContinuousSec;
     // Logs reales mandan; el intake solo arranca el perfil.
-    const demonstratedContinuousSec = fromLogs != null
-      ? fromLogs
-      : (declaredSec != null && Number.isFinite(Number(declaredSec)) ? Number(declaredSec) : null);
+    const demonstratedContinuousSec = fromLogs;
     const confirmedDistances = completed
       .filter(l => typeof l.distanceKm === 'number' && l.distanceEstimated === false)
       .map(l => l.distanceKm);
@@ -406,6 +458,7 @@
 
     const recent = valid.slice(0, p.trendWindow);
     const recentGood = recent.filter(l =>
+      evidenceForLog(l).sufficient &&
       l.prescriptionCompleted !== false &&
       l.execution !== 'aborted' &&
       Number(l.rpe) <= 5 &&
@@ -422,15 +475,9 @@
       l.execution === 'aborted'
     ).length;
 
-    let confidence = 'baja';
-    let confidenceNote = 'Información insuficiente o inconsistente para decidir con firmeza.';
-    if (withRpe.length >= 4 && continuous.length >= 3 && recent.length >= 3) {
-      confidence = 'alta';
-      confidenceNote = 'Tenemos suficiente información reciente y consistente para evaluar tu evolución.';
-    } else if (withRpe.length >= 2 && completed.length >= 2) {
-      confidence = 'media';
-      confidenceNote = 'Datos suficientes, con ciertas limitaciones.';
-    }
+    const confidenceResult = trainingConfidence(logs, plan);
+    const confidence = confidenceResult.confidence;
+    const confidenceNote = confidenceResult.note;
 
     const caution = assessCaution(logs, plan);
 
@@ -495,6 +542,7 @@
     const soft = Boolean(opts.conservative);
     const key = CONTINUOUS_ABILITY[abilityKey] ? abilityKey : '1min';
     const map = {
+      unknown: { runSeconds: 0, walkSeconds: 300, reps: 1 },
       none: {
         runSeconds: 30,
         walkSeconds: soft ? 120 : 90,
@@ -540,6 +588,7 @@
     const goalKey = GOAL_CATALOG[raw.goalType] ? raw.goalType : '5k_finish_runwalk';
     const goal = GOAL_CATALOG[goalKey];
     const sessionsPerWeek = Math.min(4, Math.max(2, Number(raw.sessionsPerWeek) || 3));
+    const requestedSessionsPerWeek = Math.min(4, Math.max(sessionsPerWeek, Number(raw.requestedSessionsPerWeek) || sessionsPerWeek));
     const environment = ['outdoor', 'treadmill', 'both'].includes(raw.environment)
       ? raw.environment
       : 'both';
@@ -548,10 +597,19 @@
     if ((goal.type === '10k' || goal.type === '5k_pb') && ability.stage >= 5) intakeStage = 6;
     if (hasPain && intakeStage > 1) intakeStage = Math.max(1, intakeStage - 1);
     const runSpeed = Number(raw.runSpeed);
+    let assessment = ['walk', 'jog', 'run', 'history'].includes(raw.assessment) ? raw.assessment : 'later';
+    if (assessment === 'run' && ['none', 'unknown'].includes(abilityKey)) assessment = 'walk';
+    if (assessment === 'jog' && !['15', '30'].includes(raw.walkTolerance)) assessment = 'walk';
     return {
+      recentActivity: ['none', 'walk', 'run', 'unknown'].includes(raw.recentActivity) ? raw.recentActivity : 'unknown',
+      walkTolerance: raw.walkTolerance || 'unknown',
+      availableMinutes: Math.max(15, Math.min(60, Number(raw.availableMinutes) || 30)),
+      assessment,
       goalType: goal.type,
       continuousAbility: abilityKey,
       sessionsPerWeek,
+      requestedSessionsPerWeek,
+      frequencyConfirmed: Boolean(raw.frequencyConfirmed),
       environment,
       hasPain,
       painNote: hasPain ? String(raw.painNote || '').trim() : '',
@@ -565,15 +623,27 @@
     };
   }
 
+  function initialPrescription(intake) {
+    let st = startingStructureForAbility(intake.continuousAbility, { conservative: intake.hasPain });
+    if (intake.assessment === 'walk' || intake.hasPain || ['unknown', 'none'].includes(intake.continuousAbility) && intake.assessment !== 'jog') {
+      st = structureFromClassic({ warmSeconds: 300, coolSeconds: 300, runSeconds: 0, walkSeconds: 300, reps: 1 });
+    } else if (intake.assessment === 'jog') {
+      st = structureFromClassic({ warmSeconds: 300, coolSeconds: 300, runSeconds: intake.continuousAbility === 'none' ? 30 : 60, walkSeconds: 90, reps: 4 });
+    }
+    if (intake.recentActivity === 'none' && st.runSeconds > 60) { st.runSeconds = Math.round(st.runSeconds * 0.75 / 15) * 15; }
+    const budget = intake.availableMinutes * 60 - st.warmSeconds - st.coolSeconds;
+    if (st.reps === 1) st.runSeconds = Math.min(st.runSeconds, Math.max(0, budget - st.walkSeconds));
+    else st.reps = Math.max(1, Math.min(st.reps, Math.floor(budget / (st.runSeconds + st.walkSeconds))));
+    return st;
+  }
+
   function buildPlanFromIntake(rawIntake = {}, settings = {}) {
     const intake = normalizeIntake(rawIntake);
     intake.completedAt = localDateISO();
     const goal = GOAL_CATALOG[intake.goalType] || GOAL_CATALOG['5k_finish_runwalk'];
-    const raceDate = intake.raceDate || addDaysISO(localDateISO(), goal.horizonDays);
+    const raceDate = intake.raceDate;
     const checkpointDate = addDaysISO(localDateISO(), 21);
-    const structure = startingStructureForAbility(intake.continuousAbility, {
-      conservative: intake.hasPain
-    });
+    const structure = initialPrescription(intake);
     const plan = {
       version: 4,
       engineVersion: ENGINE_VERSION,
@@ -594,18 +664,24 @@
         sessionsPerWeek: intake.sessionsPerWeek,
         beginnerSessionsPerWeek: intake.sessionsPerWeek
       },
+      scheduleAnchorDate: localDateISO(),
+      requestedSessionsPerWeek: intake.requestedSessionsPerWeek,
+      frequencyConfirmed: intake.frequencyConfirmed,
       sessions: [],
       pendingSpeedSuggestion: null
     };
     plan.athleteProfile = deriveProfile([], plan, settings);
     plan.sessions.push(makeRunItem(plan, structure, {
-      title: 'Sesión 1 · Tu punto de partida',
+      title: intake.hasPain ? 'Pausar y revisar la molestia' : intake.assessment === 'later' ? 'Sesión 1 · Propuesta provisional' : 'Evaluación cómoda',
+      isAssessment: !intake.hasPain && ['walk', 'jog', 'run'].includes(intake.assessment),
       action: 'consolidate',
       sessionGoal: 'Confirmar tu nivel de entrada',
-      justification: `Onboarding: ${CONTINUOUS_ABILITY[intake.continuousAbility].label}. Objetivo: ${goal.label}.`,
+      justification: `Elegimos esta sesión porque declaraste: ${CONTINUOUS_ABILITY[intake.continuousAbility].label}, actividad reciente ${({'none':'escasa','walk':'de caminatas','run':'de carrera','unknown':'por confirmar'})[intake.recentActivity]} y ${intake.availableMinutes} minutos disponibles. ${intake.assessment === 'later' ? 'Propuesta provisional: la ajustaremos al observarte.' : 'Evaluación cómoda, sin buscar tu máximo.'}`,
       primaryDimension: plan.athleteProfile.priorityDimension,
       estimatedKm: estimateKm(structure, settings)
     }));
+    plan.sessions[0].isAssessment = !intake.hasPain && ['walk', 'jog', 'run'].includes(intake.assessment);
+    plan.sessions[0].blockedUntilRest = intake.hasPain;
     return ensureHorizon(plan, [], settings, {
       action: 'consolidate',
       reason: 'Plan inicial personalizado desde onboarding.'
@@ -616,6 +692,20 @@
    * Recalibración explícita del usuario sobre la próxima sesión pendiente.
    * direction: 'easier' | 'harder'
    */
+  function constrainPrescription(structure, plan, fallback = structure) {
+    let st = structureFromClassic(structure);
+    const intake = plan?.intake;
+    const fallbackSt = structureFromClassic(fallback);
+    if (intake && fallbackSt.runSeconds === 0 && !plan.walkToJogAcceptedAt) return fallbackSt;
+    const budget = Math.max(0, (Number(intake?.availableMinutes) || 180) * 60 - st.warmSeconds - st.coolSeconds);
+    if (st.reps === 1) {
+      if (st.runSeconds > 0) st.runSeconds = Math.max(0, Math.min(st.runSeconds, budget - st.walkSeconds));
+      else st.walkSeconds = Math.min(st.walkSeconds, budget);
+    } else st.reps = Math.max(1, Math.min(st.reps, Math.floor(budget / Math.max(1, st.runSeconds + st.walkSeconds))));
+    if (metrics(st).totalSec > (Number(intake?.availableMinutes) || 180) * 60) return fallbackSt;
+    return st;
+  }
+
   function applyStructureToRun(openRun, structure, settings, prev, direction) {
     openRun.structure = structureFromClassic(structure);
     openRun.changeSummary = compareStructures(prev, openRun.structure);
@@ -645,9 +735,9 @@
     const profile = deriveProfile(logs, plan, settings);
     const intakeKey = plan?.intake?.continuousAbility || profile.intakeAbility || '1min';
     const conservative = Boolean(plan?.intake?.hasPain || profile.caution);
-    let floor = startingStructureForAbility(intakeKey, { conservative });
+    let floor = plan?.intake ? initialPrescription(plan.intake) : startingStructureForAbility(intakeKey, { conservative });
     const completed = validTrainingLogs(logs)
-      .filter(l => l.prescriptionCompleted !== false && l.execution !== 'aborted' && Number(l.rpe) <= 7)
+      .filter(l => evidenceForLog(l).sufficient && l.prescriptionCompleted !== false && l.execution !== 'aborted' && Number(l.rpe) <= 7)
       .slice(0, 3);
     for (const log of completed) {
       const sid = log.planSessionId;
@@ -661,7 +751,7 @@
     if (floor.walkSeconds > 0 && floor.walkSeconds < 60) {
       floor = structureFromClassic({ ...floor, walkSeconds: 60 });
     }
-    return structureFromClassic(floor);
+    return constrainPrescription(floor, plan, plan?.intake ? initialPrescription(plan.intake) : floor);
   }
 
   function isAtOrBelowFloor(structure, floor) {
@@ -704,6 +794,7 @@
     if (!openRun) {
       return { plan: next, changed: false, message: 'No hay una sesión pendiente para recalibrar.' };
     }
+    if (openRun.blockedUntilRest) return { plan: next, changed: false, message: 'Mantenemos la pausa por síntomas antes de ajustar la carga.' };
     refreshStaleSchedule(openRun);
     const profile = deriveProfile(logs, next, settings);
     const floor = sessionFloorStructure(next, logs, settings);
@@ -747,6 +838,8 @@
         message: 'No se pudo suavizar más sin salir del rango seguro. Si duele, registrá recuperación.'
       };
     }
+    chosen = constrainPrescription(chosen, next, prev);
+    if (describeStructure(prev) === describeStructure(chosen)) return { plan: next, changed: false, message: 'El ajuste no cabe en tu tiempo disponible o requiere confirmar antes una prueba de trote.' };
     applyStructureToRun(openRun, chosen, settings, prev, direction);
     next.lastRecalibration = {
       at: localDateISO(),
@@ -822,13 +915,14 @@
       return { plan: next, changed: false, message: 'No hay una sesión pendiente para restablecer.' };
     }
     const prev = structureFromClassic(openRun.structure);
+    if (openRun.blockedUntilRest) return { plan: next, changed: false, message: 'Mantenemos la pausa por síntomas antes de restablecer la sesión.' };
     const profile = deriveProfile(logs, next, settings);
     const floor = sessionFloorStructure(next, logs, settings);
     // null fallback → usa intakeAbility / stage del perfil (nivel de onboarding).
-    const fromProfile = structureFromClassic(structureForProfile(profile, null) || floor);
-    const chosen = loadRank(fromProfile) >= loadRank(floor)
-      ? fromProfile
-      : floor;
+    const initial = next.intake ? initialPrescription(next.intake) : floor;
+    const fromProfile = profile.demonstratedContinuousSec > 0 && prev.runSeconds > 0 ? structureFromClassic(structureForProfile(profile, null) || floor) : initial;
+    const strongerReference = loadRank(fromProfile) >= loadRank(floor) ? fromProfile : floor;
+    const chosen = constrainPrescription(strongerReference, next, prev);
     const beforeDate = openRun.scheduledDate;
     refreshStaleSchedule(openRun);
     if (describeStructure(prev) === describeStructure(chosen)) {
@@ -883,20 +977,22 @@
   function trendFavorable(logs, plan) {
     const p = paramsOf(plan);
     const valid = validTrainingLogs(logs).slice(0, p.trendWindow);
-    if (valid.length < p.trendWindow) {
-      return { ok: false, reason: `Menos de ${p.trendWindow} entrenamientos válidos para tendencia.`, sampleSize: valid.length };
-    }
-    const completed = valid.filter(l => l.prescriptionCompleted !== false && l.execution !== 'aborted');
-    if (completed.length < p.minGoodSessionsForProgress) {
-      return { ok: false, reason: 'Pocas sesiones completas en la ventana.', sampleSize: valid.length };
-    }
-    if (completed.some(l => Number(l.rpe) > 6)) {
-      return { ok: false, reason: 'RPE > 6 en la ventana reciente.', sampleSize: valid.length };
-    }
-    if (valid.some(l => hasSafetyOverride(l) || hasModeratePain(l))) {
-      return { ok: false, reason: 'Alertas de seguridad o molestia relevante en la ventana.', sampleSize: valid.length };
-    }
-    return { ok: true, reason: 'Tendencia favorable en la ventana reciente.', sampleSize: valid.length };
+    const fail = reason => ({ ok: false, reason, sampleSize: valid.length });
+    if (valid.length < p.trendWindow) return fail(`Menos de ${p.trendWindow} intentos válidos para tendencia.`);
+    if (valid.some(log => !evidenceForLog(log).sufficient)) return fail('Datos esenciales incompletos o incoherentes en la ventana reciente.');
+    const completed = valid.filter(observedCompletion);
+    if (completed.length < p.minGoodSessionsForProgress) return fail('Menos de dos intentos completos en la ventana reciente.');
+    if (completed.some(log => Number(log.rpe) > 6)) return fail('Algún intento completo reciente tuvo esfuerzo superior a 6/10.');
+    if (valid.some(log => log.pain || hasSafetyOverride(log) || hasModeratePain(log))) return fail('Hay molestias o alertas en los últimos intentos.');
+    const chronological = completed.slice().reverse();
+    const first = chronological[0], last = chronological.at(-1);
+    const effortWorse = Number(last.rpe) - Number(first.rpe) >= 2;
+    const continuousWorse = Number(first.maxRunBlockSec) > 0 && Number(last.maxRunBlockSec) < Number(first.maxRunBlockSec) * 0.8;
+    const previous = completed[1];
+    const recentWorse = previous && Number(last.rpe) > Number(previous.rpe) && Number(last.maxRunBlockSec) < Number(previous.maxRunBlockSec);
+    if (effortWorse || continuousWorse || recentWorse) return fail('Deterioro sostenido de esfuerzo o tiempo continuo observado.');
+    if (trainingConfidence(valid, plan).confidence === 'baja') return fail('Confianza baja: mantenemos una propuesta provisional.');
+    return { ok: true, reason: 'Últimos tres intentos: al menos dos completos, esfuerzo hasta 6/10, sin deterioro ni alertas y con evidencia suficiente.', sampleSize: valid.length };
   }
 
   function mapProgressAction(profile, plan) {
@@ -909,215 +1005,40 @@
   /**
    * Decisión adaptativa (conserva comportamiento Fase 1 validado).
    */
+  function observedCompletion(log) {
+    if (Array.isArray(log.blocks) && log.blocks.length) return log.blocks.every(b => Number(b.actualSeconds) + 0.25 >= Number(b.prescribedSeconds) && !b.convertedToWalk);
+    return log.prescriptionCompleted === true || log.execution === 'completed' && log.prescriptionCompleted !== false;
+  }
+
   function decideAdaptive(log, priorLogs = [], plan = null) {
-    const profile = deriveProfile([log, ...(priorLogs || [])], plan, {});
-    const reasonCode = [];
-    const completed = log.prescriptionCompleted !== false && log.execution !== 'aborted';
-    const rpe = Number(log.rpe);
-    const caution = assessCaution([log, ...(priorLogs || [])], plan);
-
-    if (hasSafetyOverride(log)) {
-      reasonCode.push('SAFETY_OVERRIDE');
-      return {
-        action: 'recovery',
-        progression: 'recovery',
-        reason: 'Señal de seguridad: priorizamos recuperación antes de subir carga.',
-        medicalNotice: Boolean(log.severeWarning),
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-    if (hasModeratePain(log)) {
-      reasonCode.push('PAIN_MODERATE');
-      return {
-        action: 'recovery',
-        progression: 'recovery',
-        reason: 'Molestia relevante: recuperación antes de volver a la misma carga.',
-        medicalNotice: false,
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-    if (!completed) {
-      reasonCode.push('PRESCRIPTION_INCOMPLETE');
-      const action = rpe >= 8 ? 'reduce' : 'repeat';
-      return {
-        action,
-        progression: action === 'reduce' ? 'advance' : 'repeat',
-        reason: action === 'reduce'
-          ? 'Sesión incompleta y muy exigente: bajamos la carga en la próxima.'
-          : 'No se completó la prescripción: repetimos este estímulo. Un RPE bajo no compensa un entrenamiento incompleto.',
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-
-    if (log.pain) {
-      reasonCode.push('ALERT_PRESENT');
-      return {
-        action: 'repeat',
-        progression: 'repeat',
-        reason: 'Hubo molestia leve: mantenemos este nivel.',
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-
-    if (rpe >= 9) {
-      reasonCode.push('RPE_VERY_HIGH');
-      return {
-        action: 'reduce',
-        progression: 'advance',
-        reason: 'Esfuerzo muy alto: bajamos la carga para recuperar tolerancia.',
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-    if (rpe >= 7) {
-      reasonCode.push('RPE_HIGH');
-      return {
-        action: 'repeat',
-        progression: 'repeat',
-        reason: 'Esfuerzo alto: repetimos este estímulo sin aumentar.',
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'recovery'
-      };
-    }
-
-    // Pausas: medir hueco respecto al entrenamiento ANTERIOR (no el actual).
-    {
-      const priorValid = validTrainingLogs(priorLogs);
-      const lastPrior = priorValid[0];
-      const gapPrior = lastPrior?.date
-        ? daysBetween(lastPrior.date, log.date || localDateISO())
-        : null;
-      if (gapPrior != null && gapPrior >= paramsOf(plan).pauseDaysForReassess) {
-        reasonCode.push('PAUSE_REASSESS');
-        return {
-          action: 'reassess',
-          progression: 'advance',
-          reason: `Tras ${gapPrior} días sin entrenar, recalibramos sin borrar el historial.`,
-          reasonCode,
-          profile: { ...profile, gapDays: gapPrior, needsReassess: true },
-          caution,
-          priorityDimension: 'recovery'
-        };
-      }
-    }
-
-    if (profile.confidence === 'baja' && validTrainingLogs([log, ...priorLogs]).length < 2) {
-      reasonCode.push('LOW_EVIDENCE');
-      return {
-        action: 'consolidate',
-        progression: 'advance',
-        reason: 'Todavía hay poca evidencia: consolidamos este nivel antes de subir.',
-        reasonCode,
-        profile,
-        caution,
-        priorityDimension: 'consistency'
-      };
-    }
-
+    const profile = deriveProfile([log, ...priorLogs], plan, {});
+    const caution = assessCaution([log, ...priorLogs], plan);
+    const result = (action, progression, reason, code, extra = {}) => ({ action, progression, reason, reasonCode: [code], profile, caution, priorityDimension: progression === 'recovery' ? 'recovery' : 'continuous', ...extra });
+    if (hasSafetyOverride(log) || hasModeratePain(log)) return result('recovery', 'recovery', 'Suspendemos la progresión. No vuelvas a correr con síntomas que empeoran o alteran tu marcha; revisá la molestia antes de retomar.', 'SAFETY_OVERRIDE', { medicalNotice: Boolean(log.severeWarning) });
+    const complete = observedCompletion(log);
+    if (!complete) return result('repeat', 'repeat', 'Guardamos lo realizado. La próxima mantiene los mismos intervalos porque quedaron bloques incompletos.', 'PRESCRIPTION_INCOMPLETE');
+    const rpe = log.rpe == null || log.rpe === '' ? NaN : Number(log.rpe);
+    const evidence = evidenceForLog(log);
+    if (!evidence.sufficient || profile.confidence === 'baja') return result('repeat', 'repeat', 'Propuesta provisional: confirmá esfuerzo, molestias y tramo continuo observado antes de aumentar.', 'LOW_EVIDENCE');
+    if (log.pain) return result('repeat', 'repeat', 'Completaste la sesión con molestia. Mantenemos los intervalos y revisamos cómo evoluciona.', 'ALERT_PRESENT');
+    if (rpe >= 7) return result('repeat', 'repeat', 'Completaste la sesión. La próxima mantiene los mismos intervalos por el esfuerzo registrado (7/10 o más).', 'RPE_HIGH');
+    const interruptedDose = log.source === 'timer' && Array.isArray(log.blocks) && log.blocks.some(block => (block.type === 'run' || block.prescribedType === 'run') && block.longestRunSeconds != null && Number(block.longestRunSeconds) + 1 < Number(block.prescribedSeconds));
+    if (interruptedDose) return result('repeat', 'repeat', 'Completaste el tiempo acumulado de carrera. Antes de ampliar el bloque, confirmemos el tramo prescrito sin interrupción; la próxima mantiene los mismos intervalos.', 'CONTINUOUS_NOT_CONFIRMED');
+    if (Number(log.maxRunBlockSec) === 0) return result('repeat', 'repeat', 'Completaste la caminata cómoda. Si caminar ya es cómodo y podías conversar, podés elegir una prueba corta de trote sin rehacer tus respuestas.', 'WALK_OBSERVED');
+    const last = validTrainingLogs(priorLogs)[0];
+    if (last && daysBetween(last.date, log.date) >= paramsOf(plan).pauseDaysForReassess) return result('repeat', 'repeat', 'Tras una pausa larga, repetimos esta sesión cómoda para confirmar tolerancia antes de aumentar.', 'PAUSE_REASSESS');
     if (rpe === 6) {
-      const trend = trendFavorable(priorLogs, plan);
-      if (trend.ok && profile.recentGood >= 1) {
-        const action = mapProgressAction(profile, plan);
-        reasonCode.push('RPE_6_TREND_OK');
-        return {
-          action,
-          progression: 'advance',
-          reason: `Esfuerzo moderado-alto con tendencia aceptable: progresamos con cuidado. ${trend.reason}`,
-          reasonCode,
-          profile,
-          trend,
-          caution,
-          priorityDimension: profile.priorityDimension
-        };
-      }
-      reasonCode.push('RPE_6_HOLD');
-      return {
-        action: 'consolidate',
-        progression: 'advance',
-        reason: `Esfuerzo 6: consolidamos. ${trend.reason}`,
-        reasonCode,
-        profile,
-        trend,
-        caution,
-        priorityDimension: 'consistency'
-      };
+      const trend = trendFavorable([log, ...priorLogs], plan);
+      if (!trend.ok) return result('repeat', 'repeat', `Mantenemos los intervalos con esfuerzo 6/10. ${trend.reason}`, 'RPE_6_HOLD', { trend });
+      return result('progress_continuous', 'advance', 'Los últimos tres intentos muestran buena tolerancia: ampliamos gradualmente el tramo de trote.', 'RPE_6_TREND_OK', { trend });
     }
-
-    // RPE 1–5
-    const trend = trendFavorable([log, ...priorLogs], plan);
-    if (rpe <= 3 && (trend.ok || profile.recentGood >= 1 || profile.sessionsCompleted >= 1)) {
-      const action = mapProgressAction(profile, plan);
-      reasonCode.push('RPE_LOW_PROGRESS');
-      return {
-        action,
-        progression: 'advance',
-        reason: 'Buena tolerancia: aumentamos una dimensión de carga con límite conservador.',
-        reasonCode,
-        profile,
-        trend,
-        caution,
-        priorityDimension: profile.priorityDimension
-      };
-    }
-    if (rpe <= 5) {
-      if (trend.ok && profile.recentGood >= paramsOf(plan).minGoodSessionsForProgress) {
-        const action = mapProgressAction(profile, plan);
-        reasonCode.push('RPE_MID_PROGRESS');
-        return {
-          action,
-          progression: 'advance',
-          reason: 'Tolerancia adecuada y tendencia favorable: progresamos.',
-          reasonCode,
-          profile,
-          trend,
-          caution,
-          priorityDimension: profile.priorityDimension
-        };
-      }
-      reasonCode.push('RPE_MID_CONSOLIDATE');
-      return {
-        action: 'consolidate',
-        progression: 'advance',
-        reason: 'Sesión bien tolerada: consolidamos este nivel (una sola sesión buena no basta para un salto grande).',
-        reasonCode,
-        profile,
-        trend,
-        caution,
-        priorityDimension: 'consistency'
-      };
-    }
-
-    reasonCode.push('FALLBACK_REPEAT');
-    return {
-      action: 'repeat',
-      progression: 'repeat',
-      reason: 'Mantenemos este estímulo.',
-      reasonCode,
-      profile,
-      caution,
-      priorityDimension: 'consistency'
-    };
+    return result(mapProgressAction(profile, plan), 'advance', 'Completaste todos los bloques con esfuerzo cómodo. Aumentamos gradualmente el tiempo de carrera.', 'RPE_LOW_PROGRESS');
   }
 
   function continuousStepFor(baseSec, params, profile) {
     if (baseSec >= 15 * 60) return params.continuousStepEasySec;
     if (baseSec >= 8 * 60 || (profile?.stage >= 4 && baseSec >= 5 * 60)) return params.continuousStepLongSec;
+    if (baseSec < 120) return params.continuousStepSecMin;
     return params.continuousStepSec;
   }
 
@@ -1217,6 +1138,10 @@
     }
     const list = [];
     const step = continuousStepFor(base.runSeconds, params, profile);
+    if (['progress_continuous', 'progress'].includes(rawAction) && base.runSeconds > 0 && base.runSeconds < 120) {
+      const safeStep = Math.max(1, Math.floor(base.runSeconds * params.maxRunVolumeIncreasePct / 100));
+      list.push(candidate(base, { runSeconds: base.runSeconds + Math.min(step, safeStep) }, `Trote cómodo +${Math.min(step, safeStep)}s`, 'continuous'));
+    }
 
     if (rawAction === 'repeat' || rawAction === 'consolidate') {
       list.push(candidate(base, {}, 'Misma carga', null));
@@ -1317,6 +1242,7 @@
 
     const filtered = [];
     for (const c of list) {
+      if (plan?.intake?.availableMinutes && c.metrics.totalSec > Math.max(metrics(base).totalSec, plan.intake.availableMinutes * 60)) continue;
       if (rawAction === 'repeat' || (rawAction === 'consolidate' && c.primaryVar == null)) {
         filtered.push({ ...c, limit: { ok: true } });
         continue;
@@ -1394,43 +1320,38 @@
   }
 
   function allocateScheduleDates(plan, params) {
-    const gap = Math.max(1, Number(params.minRestDaysBetweenRuns) || 1);
-    let cursor = localDateISO();
-    const last = lastScheduledDate(plan);
-    if (last && last >= cursor) cursor = addDaysISO(last, gap);
-    else if (last) {
-      const since = daysBetween(last, cursor);
-      if (since != null && since < gap) cursor = addDaysISO(last, gap);
-    }
-
-    const open = [...(plan.sessions || [])]
-      .filter(s => s.status === 'pending' || s.status === 'rescheduled')
-      .sort((a, b) => (a.order || 0) - (b.order || 0));
-
-    for (const item of open) {
-      if (item.kind === 'rest') {
-        if (!item.scheduledDate) {
-          item.scheduledDate = cursor;
-          cursor = addDaysISO(cursor, 1);
-        } else {
-          cursor = addDaysISO(item.scheduledDate, 1);
+    const restDays = Math.max(1, Number(params.minRestDaysBetweenRuns) || 1);
+    const requested = Math.max(1, Math.min(4, Number(plan.intake?.requestedSessionsPerWeek || plan.requestedSessionsPerWeek || params.sessionsPerWeek) || 3));
+    const chosen = Math.max(1, Math.min(4, Number(params.sessionsPerWeek) || 3));
+    const effective = Math.min(chosen, Math.max(1, Math.floor(7 / (restDays + 1))));
+    plan.requestedSessionsPerWeek = requested;
+    plan.effectiveSessionsPerWeek = effective;
+    plan.scheduleRequiresConfirmation = requested > effective && !(plan.intake?.frequencyConfirmed || plan.frequencyConfirmed);
+    plan.scheduleNotice = requested > effective ? `Pediste ${requested} días por semana. Con ${restDays} día de descanso entre carreras, programamos ${effective} días; confirmá esta alternativa o revisá tu disponibilidad.` : null;
+    plan.scheduleAnchorDate = plan.scheduleAnchorDate || localDateISO();
+    const offsets = Array.from({ length: effective }, (_, i) => Math.floor(i * 7 / effective));
+    const onCadence = date => offsets.includes(((daysBetween(plan.scheduleAnchorDate, date) % 7) + 7) % 7);
+    const firstCadenceDate = minimum => { let date = minimum; for (let i = 0; i < 7 && !onCadence(date); i++) date = addDaysISO(date, 1); return date; };
+    let minimumRunDate = localDateISO();
+    let previousRunDate = null;
+    const sorted = [...(plan.sessions || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+    for (const item of sorted) {
+      if (!['pending', 'rescheduled'].includes(item.status)) {
+        if (item.kind === 'run' && item.status === 'completed') {
+          previousRunDate = item.completedDate || item.attempts?.filter(a => a.date).at(-1)?.date || item.scheduledDate;
+          if (previousRunDate) minimumRunDate = [minimumRunDate, addDaysISO(previousRunDate, restDays + 1)].sort().at(-1);
         }
         continue;
       }
-      // run
-      if (!item.scheduledDate || item.status === 'pending') {
-        // No apilar varias corridas el mismo día
-        const used = new Set(
-          (plan.sessions || [])
-            .filter(s => s.id !== item.id && s.kind === 'run' && s.scheduledDate)
-            .map(s => s.scheduledDate)
-        );
-        while (used.has(cursor)) cursor = addDaysISO(cursor, 1);
-        item.scheduledDate = cursor;
-        cursor = addDaysISO(cursor, gap + 1);
-      } else {
-        cursor = addDaysISO(item.scheduledDate, gap + 1);
+      if (item.kind === 'rest') {
+        item.scheduledDate = item.scheduledDate || (previousRunDate ? addDaysISO(previousRunDate, 1) : localDateISO());
+        continue;
       }
+      const explicitDate = item.status === 'rescheduled' && item.scheduledDate && item.scheduledDate >= minimumRunDate;
+      const keptDate = item.scheduledDate && item.scheduledDate >= minimumRunDate && onCadence(item.scheduledDate);
+      item.scheduledDate = explicitDate || keptDate ? item.scheduledDate : firstCadenceDate(minimumRunDate);
+      previousRunDate = item.scheduledDate;
+      minimumRunDate = addDaysISO(previousRunDate, restDays + 1);
     }
     return plan;
   }
@@ -1491,7 +1412,8 @@
 
   function makeControlTestItem(plan, settings = {}) {
     const params = paramsOf(plan);
-    const sec = Number(params.controlTestSec) || 12 * 60;
+    const observed = Math.max(30, Number(plan.athleteProfile?.demonstratedContinuousSec) || 30);
+    const sec = Math.min(Number(params.controlTestSec) || 12 * 60, observed);
     const st = structureFromClassic({
       warmSeconds: params.warmSeconds,
       coolSeconds: params.coolSeconds,
@@ -1654,6 +1576,7 @@
 
     const valid = validTrainingLogs(logs).slice(0, 6);
     const comparable = valid.filter(l =>
+      evidenceForLog(l).sufficient &&
       l.prescriptionCompleted !== false &&
       l.execution !== 'aborted' &&
       Number(l.rpe) <= params.speedSuggestMaxRpe &&
@@ -1681,7 +1604,7 @@
     // Evidencia objetiva: ritmo de carrera del ciclo (sin warm/cool) cuando está persistido.
     const withPace = continuousSessions.filter(l => {
       const kmh = Number(l.paceMetrics?.runSpeedKmh || l.paceMetrics?.cycleSpeedKmh);
-      return Number.isFinite(kmh) && kmh > 0 && l.paceMetrics?.distanceSource === 'attributed';
+      return Number.isFinite(kmh) && kmh > 0 && l.runDistanceConfirmed === true && Number(l.runDistanceKm) > 0;
     });
     const minPaceSamples = Number(params.paceSuggestMinSamples) || 2;
     if (withPace.length >= minPaceSamples) {
@@ -1711,6 +1634,7 @@
     }
 
     const confirmed = continuousSessions.filter(l =>
+      l.runDistanceConfirmed === true && Number(l.runDistanceKm) > 0 &&
       typeof l.distanceKm === 'number' &&
       l.distanceEstimated === false &&
       typeof l.elapsedSec === 'number' && l.elapsedSec > 0
@@ -1946,9 +1870,15 @@
     estimateKm,
     describeStructure,
     compareStructures,
+    compareAttemptRecency,
+    evidenceForLog,
+    durationOfLog,
+    trainingConfidence,
+    constrainPrescription,
     deriveProfile,
     assessCaution,
     trendFavorable,
+    observedCompletion,
     decideAdaptive,
     generateCandidates,
     pickCandidate,
@@ -1964,6 +1894,7 @@
     shouldScheduleControlTest,
     structureForProfile,
     startingStructureForAbility,
+    initialPrescription,
     normalizeIntake,
     buildPlanFromIntake,
     recalibrateLoad,

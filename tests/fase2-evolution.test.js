@@ -247,7 +247,7 @@ console.log('\n=== Escenario F: ya corre 30 min ===');
   const seedLogs = [1, 3, 5].map(d => ({
     id: `e${d}`, date: `2026-01-0${d}`, type: 'Cinta', rpe: 3, maxRunBlockSec: 30 * 60,
     prescriptionCompleted: true, execution: 'completed', distanceKm: 5.1, distanceEstimated: false,
-    source: 'test'
+    source: 'test', pain: false
   }));
   plan = A.ensureHorizon(plan, seedLogs, { runSpeed: 7.5 }, { action: 'progress_volume', reason: 'test' });
   const open = A.pendingRuns(plan)[0];
@@ -264,7 +264,7 @@ console.log('\n=== Escenario G: mejora marca 5K ===');
   const logs = [1, 3, 5, 7].map(d => ({
     id: `g${d}`, date: `2026-02-0${d}`, type: 'Cinta', rpe: 3, maxRunBlockSec: 30 * 60,
     prescriptionCompleted: true, execution: 'completed', distanceKm: 5.0, distanceEstimated: false,
-    elapsedSec: 1800, source: 'test'
+    elapsedSec: 1800, source: 'test', pain: false, pain: false
   }));
   const profile = A.deriveProfile(logs, plan, { runSpeed: 8 });
   assert(profile.priorityDimension === 'performance' || profile.stage >= 5, 'G: dimensión rendimiento o etapa alta');
@@ -296,10 +296,10 @@ console.log('\n=== Escenario H: velocidades ===');
 console.log('\n=== Confianza vs precaución ===');
 {
   const logs = [
-    { id: '1', date: '2026-04-01', type: 'Cinta', rpe: 8, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 120, source: 'test' },
-    { id: '2', date: '2026-04-03', type: 'Cinta', rpe: 4, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 120, source: 'test' },
-    { id: '3', date: '2026-04-05', type: 'Cinta', rpe: 3, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 150, source: 'test' },
-    { id: '4', date: '2026-04-07', type: 'Cinta', rpe: 3, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 150, source: 'test' }
+    { id: '1', date: '2026-04-01', type: 'Cinta', rpe: 8, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 120, source: 'test', pain: false },
+    { id: '2', date: '2026-04-03', type: 'Cinta', rpe: 4, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 120, source: 'test', pain: false },
+    { id: '3', date: '2026-04-05', type: 'Cinta', rpe: 3, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 150, source: 'test', pain: false },
+    { id: '4', date: '2026-04-07', type: 'Cinta', rpe: 3, prescriptionCompleted: true, execution: 'completed', maxRunBlockSec: 150, source: 'test', pain: false }
   ];
   setDay('2026-04-07');
   const profile = A.deriveProfile(logs, freshPlan(), {});
@@ -344,14 +344,14 @@ console.log('\n=== Simulación 14 días A vs B (UI-flow PaceCoach) ===');
   console.log('B sample:', bRows.map(r => `${r.date} ${r.action} → ${r.next}`).join('\n  '));
 }
 
-console.log('\n=== Regresión Fase 1: RPE 9 reduce, incompleta no progresa ===');
+console.log('\n=== Regresión Fase 1: RPE 9 repite, incompleta no progresa ===');
 {
   let plan = freshPlan();
   let logs = [];
   let out = trainOnce(plan, logs, '2026-06-01', { rpe: 3 });
   plan = out.plan; logs = out.logs;
   out = trainOnce(plan, logs, out.cursor, { rpe: 9 });
-  assert(out.row.action === 'reduce', 'RPE 9 → reduce');
+  assert(out.row.action === 'repeat', 'RPE 9 → repeat (regla actual)');
   out = trainOnce(out.plan, out.logs, out.cursor, { rpe: 2, incomplete: true });
   assert(out.row.action === 'repeat', 'incompleta RPE 2 → repeat');
 }

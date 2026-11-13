@@ -1,6 +1,6 @@
 /**
- * PACE/01 Product layer — cuenta local, analytics, recordatorios, hitos, copy humano.
- * Sin backend: sync = paquete JSON entre dispositivos.
+ * 4Running product layer: perfil, exportación, recordatorios y copy.
+ * La identidad y sincronización de cuenta se coordinan en cloud.js y server.mjs.
  */
 (() => {
   const ACCOUNT_KEY = 'pace01.account.v1';
@@ -21,7 +21,7 @@
     lastBackupAt: null,
     lastReminderPromptAt: null,
     guidedSessionIndex: 0, // 0..3 tips for first sessions
-    cloudSyncNote: 'local-only'
+    cloudSyncNote: 'account-sync'
   });
 
   function clone(v) {
@@ -98,13 +98,13 @@
     return data;
   }
 
-  function applySyncPack(data, { mergeLogs = false } = {}) {
+  function applySyncPack(data, { mergeLogs = false, keepPlan = false } = {}) {
     const pack = parseSyncPack(data);
-    if (pack.account) saveAccount({ ...defaultAccount(), ...pack.account, cloudSyncNote: 'local-only' });
+    if (pack.account) saveAccount({ ...defaultAccount(), ...pack.account, cloudSyncNote: 'account-sync' });
     if (pack.settings) {
       localStorage.setItem('pace01.settings.v1', JSON.stringify(pack.settings));
     }
-    if (pack.plan) {
+    if (pack.plan && !(keepPlan && JSON.parse(localStorage.getItem('pace01.plan.v3') || 'null')?.onboardingCompleted)) {
       localStorage.setItem('pace01.plan.v3', JSON.stringify(pack.plan));
     }
     if (Array.isArray(pack.logs)) {
@@ -152,7 +152,7 @@
     {
       id: 'guide-3-close',
       title: 'Paso 3 · Cerrar y guardar',
-      body: 'Al terminar, cargá esfuerzo y tiempo. El ritmo del ciclo (sin calentamiento) nos ayuda a adaptar el plan.'
+      body: 'Al terminar, cargá esfuerzo y tiempo. Los bloques realizados, el esfuerzo y las molestias nos ayudan a adaptar el plan.'
     }
   ];
 
@@ -313,7 +313,7 @@
     if (sessionStorage.getItem(key)) return false;
     try {
       // eslint-disable-next-line no-new
-      new Notification('PACE/01', {
+      new Notification('4Running', {
         body: 'Hoy tenés entrenamiento. Cuando puedas, abrí la app y arrancá.',
         tag: 'pace01-today'
       });
@@ -327,9 +327,9 @@
 
   function iosPwaHelp() {
     return [
-      'En iPhone: Compartir → «Agregar a pantalla de inicio» para instalar PACE/01.',
+      'En iPhone: Compartir → «Agregar a pantalla de inicio» para instalar 4Running.',
       'Durante el entreno dejá la pantalla activa: iOS puede silenciar alertas con la app en segundo plano.',
-      'Los datos viven en este dispositivo. Exportá un respaldo desde Ajustes con frecuencia.'
+      'Tu cuenta sincroniza los datos. Los cambios sin conexión quedan en este navegador hasta volver a sincronizar; revisá el estado en Ajustes.'
     ];
   }
 

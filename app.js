@@ -15,11 +15,17 @@
     lastEnvironment: null
   };
 
-  let settings = loadSettings();
+  let settings = { ...defaultSettings };
   let plan = null;
   let logs = null;
   let activePlanSessionId = null;
   let workout = [];
+  let workoutRuntime = null;
+  let activeAttemptId = null;
+  let activePrescriptionSnapshot = null;
+  let lastWorkoutPersistedAt = 0;
+  let releaseWorkoutLease = null;
+  let recoveryOffered = false;
   let currentBlockIndex = 0;
   let remainingMs = 0;
   let originalBlockMs = 0;
@@ -46,7 +52,7 @@
   /** Tiempo del cronómetro al abrir el cierre (para no comparar contra un elapsed vivo). */
   let closeMeasuredTime = null;
   let onboardStep = 1;
-  let account = window.PaceProduct ? window.PaceProduct.loadAccount() : null;
+  let account = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -121,7 +127,7 @@
       { type: 'warm', label: 'Calentar', seconds: st.warmSeconds, cue: 'Calentar' }
     ];
     for (let i = 1; i <= st.reps; i++) {
-      blocks.push({ type: 'run', label: 'Correr', seconds: st.runSeconds, rep: i, cue: 'Correr' });
+      if (st.runSeconds > 0) blocks.push({ type: 'run', label: 'Correr', seconds: st.runSeconds, rep: i, cue: 'Correr' });
       if (Number(st.walkSeconds) > 0) {
         blocks.push({ type: 'walk', label: 'Caminar', seconds: st.walkSeconds, rep: i, cue: 'Caminar' });
       }
@@ -129,6 +135,9 @@
     blocks.push({ type: 'cool', label: 'Enfriar', seconds: st.coolSeconds, cue: 'Enfriar' });
     return blocks.map(block => ({
       ...block,
+      actualSeconds: 0,
+      runObserved: 0,
+      prescribedType: block.type,
       prescribedSeconds: block.seconds,
       extraSeconds: 0,
       speed: speedForType(block.type)
@@ -230,14 +239,102 @@
     return `${Number(speed).toFixed(1).replace('.', ',')} km/h`;
   }
 
+  function runtimeState() {
+    return workoutRuntime?.state(Date.now());
+  }
+
+  function applyRuntimeState(state = runtimeState()) {
+    if (!state || !workoutRuntime) return;
+    currentBlockIndex = state.index;
+    running = state.running;
+    remainingMs = state.remainingMs;
+    elapsedMs = state.elapsedMs;
+    hasStarted = state.started;
+    const original = workoutRuntime.blocks;
+    workout = original.map((b, i) => ({ ...b, prescribedType: b.prescribedType || b.type, prescribedSeconds: b.prescribedSeconds ?? b.seconds, type: i === state.index ? state.currentType : b.type, label: i === state.index && state.currentType === 'walk' && b.type === 'run' ? 'Caminar' : b.label }));
+    originalBlockMs = blockBudgetMs(workout[currentBlockIndex]);
+  }
+
   function getLiveElapsedMs() {
-    if (!running || runStartedAt == null) return elapsedMs;
-    return elapsedMs + (performance.now() - runStartedAt);
+    return runtimeState()?.elapsedMs ?? elapsedMs;
   }
 
   function getLiveRemainingMs() {
-    if (!running || blockDeadline == null) return remainingMs;
-    return Math.max(0, blockDeadline - performance.now());
+    return runtimeState()?.remainingMs ?? remainingMs;
+  }
+
+  function activeWorkoutKey() {
+    const owner = window.PaceCloud?.userId?.() || localStorage.getItem('4running.cacheOwner');
+    return owner ? `4running.activeWorkout.${owner}` : null;
+  }
+
+  async function acquireWorkoutLease() {
+    if (releaseWorkoutLease) return true;
+    const key = activeWorkoutKey();
+    if (!key) return false;
+    if (!navigator.locks) {
+      showToast('Este navegador no permite coordinar el cronómetro entre pestañas. Usá una sola pestaña para entrenar.');
+      return true;
+    }
+    return new Promise(resolve => {
+      navigator.locks.request(key, { ifAvailable: true }, lock => {
+        if (!lock) { resolve(false); return; }
+        return new Promise(release => { releaseWorkoutLease = release; resolve(true); });
+      }).catch(() => resolve(false));
+    });
+  }
+
+  function persistActiveWorkout(force = false) {
+    if (!workoutRuntime || !hasStarted || !activeAttemptId) return;
+    const now = Date.now();
+    if (!force && now - lastWorkoutPersistedAt < 1000) return;
+    const key = activeWorkoutKey();
+    if (!key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify({ version: 1, attemptId: activeAttemptId, planSessionId: activePlanSessionId, prescription: activePrescriptionSnapshot, environment: sessionEnvironment, runtime: workoutRuntime.snapshot(now), savedAt: now }));
+      lastWorkoutPersistedAt = now;
+    } catch (error) {
+      console.error('[4running] active-workout-save', error);
+      showToast('No pudimos respaldar el cronómetro en este dispositivo. Guardá el intento antes de cerrar.');
+    }
+  }
+
+  function clearActiveWorkout() {
+    const key = activeWorkoutKey();
+    if (key && activeAttemptId) {
+      try { if (JSON.parse(localStorage.getItem(key) || 'null')?.attemptId === activeAttemptId) localStorage.removeItem(key); } catch { /* Preserve unreadable backup. */ }
+    }
+    activeAttemptId = null;
+    activePrescriptionSnapshot = null;
+    releaseWorkoutLease?.(); releaseWorkoutLease = null;
+  }
+
+  async function restoreActiveWorkout() {
+    const key = activeWorkoutKey();
+    let saved;
+    try { saved = key && JSON.parse(localStorage.getItem(key) || 'null'); } catch { return; }
+    if (!saved?.runtime || recoveryOffered) return;
+    if (!await acquireWorkoutLease()) {
+      showToast('Hay un entrenamiento activo en otra pestaña. Volvé a esa pestaña para continuarlo.');
+      return;
+    }
+    try {
+      workoutRuntime = window.WorkoutRuntime.restore(saved.runtime);
+      workoutRuntime.update(Date.now());
+      workoutRuntime.pause(Date.now());
+      activeAttemptId = saved.attemptId;
+      activePlanSessionId = saved.planSessionId;
+      activePrescriptionSnapshot = saved.prescription;
+      sessionEnvironment = saved.environment;
+      applyRuntimeState();
+      finishedAnnounced = false;
+      recoveryOffered = true;
+      renderWorkout(); updateTimerUI();
+      persistActiveWorkout(true);
+      $('#recoverySummary').textContent = `Conservamos ${formatTime(getLiveElapsedMs() / 1000)} de tu sesión. El reloj queda en pausa hasta que elijas cómo seguir.`;
+      $('#resumeRecovered').textContent = runtimeState().finished ? 'Revisar y guardar' : 'Retomar sesión';
+      $('#workoutRecoveryDialog').showModal();
+    } catch (error) { console.error('[4running] recover-workout', error); showToast('No pudimos recuperar este cronómetro. El respaldo sigue conservado en este dispositivo.'); }
   }
 
   function getRemainingPlanSeconds() {
@@ -251,29 +348,29 @@
     return formatKm(km);
   }
 
+  function recordCurrentBlock() {
+    if (hasStarted && workoutRuntime) applyRuntimeState(workoutRuntime.update(Date.now()));
+  }
+
+  function observedWorkout() {
+    recordCurrentBlock();
+    return workoutRuntime?.summary(Date.now()) || { blocks: [], ledger: [], runSeconds: 0, walkSeconds: 0, maxRunBlockSec: 0, completedBlocks: 0 };
+  }
+
   function getCompletedDistanceKm() {
-    let km = 0;
-    for (let i = 0; i < currentBlockIndex; i++) {
-      km += workout[i].speed * workout[i].seconds / 3600;
-    }
-    const block = workout[currentBlockIndex];
-    if (block) {
-      const doneMs = Math.max(0, originalBlockMs - getLiveRemainingMs());
-      km += block.speed * (doneMs / 1000) / 3600;
-    }
-    return km;
+    return observedWorkout().distanceKm || 0;
   }
 
   function noteRunProgressOnLeave() {
-    const block = workout[currentBlockIndex];
-    if (!block || block.type !== 'run') return;
-    const doneSec = Math.max(0, (originalBlockMs - getLiveRemainingMs()) / 1000);
-    currentRunCompletedSec = doneSec;
-    maxCompletedRunBlockSec = Math.max(maxCompletedRunBlockSec, doneSec);
+    recordCurrentBlock();
+    const observed = observedWorkout();
+    currentRunCompletedSec = observed.maxRunBlockSec;
+    maxCompletedRunBlockSec = observed.maxRunBlockSec;
   }
 
   function refreshWorkoutSpeeds() {
-    workout = workout.map(block => ({ ...block, speed: speedForType(block.type) }));
+    if (workoutRuntime) { workoutRuntime.setSpeeds({ run: settings.runSpeed, walk: settings.walkSpeed, warm: settings.walkSpeed, cool: settings.coolSpeed }, Date.now()); applyRuntimeState(); persistActiveWorkout(true); }
+    else workout = workout.map(block => ({ ...block, speed: speedForType(block.type) }));
     renderBlockList();
     updateTimerUI();
   }
@@ -289,7 +386,7 @@
           <small>${b.type === 'run' ? 'Trabajo' : b.type === 'walk' ? 'Recuperación' : 'Transición'}</small>
         </div>
         <span class="block-duration">${formatTime(b.seconds)}</span>
-        <span class="block-speed">${speedLabel(b.speed)}</span>
+        <span class="block-speed">${sessionEnvironment === 'treadmill' && hasSpeedBasis() ? speedLabel(b.speed) : 'Esfuerzo cómodo'}</span>
       </div>
     `).join('');
   }
@@ -308,16 +405,11 @@
   }
 
   function armBlock(index) {
-    currentBlockIndex = Math.min(Math.max(index, 0), Math.max(workout.length - 1, 0));
-    const block = workout[currentBlockIndex];
-    if (!block) return;
-    const budget = blockBudgetMs(block);
-    remainingMs = budget;
-    originalBlockMs = budget;
+    workoutRuntime?.enterBlock(index, Date.now());
+    applyRuntimeState();
     countdownBeepsFired.clear();
     finishedAnnounced = false;
-    if (running) blockDeadline = performance.now() + remainingMs;
-    else blockDeadline = null;
+    persistActiveWorkout(true);
   }
 
   function updateTimerUI() {
@@ -351,7 +443,7 @@
     const next = workout[currentBlockIndex + 1];
     const cueTime = (sec) => formatTime(sec).replace(/^0/, '');
     if (next) {
-      const nextBits = sessionEnvironment === 'treadmill'
+      const nextBits = sessionEnvironment === 'treadmill' && hasSpeedBasis()
         ? `<em>${escapeHtml(speedLabel(next.speed))}</em>`
         : next.type === 'run'
           ? `<em>Ritmo cómodo · RPE 3–5</em>`
@@ -376,14 +468,6 @@
     if (active) active.hidden = !hasStarted;
     const onTrain = $('#view-train')?.classList.contains('is-active');
     document.body.classList.toggle('is-running', Boolean(running && onTrain));
-    if (running) {
-      const more = $('#morePanel');
-      if (more && !more.hidden) {
-        more.hidden = true;
-        $('#moreToggle')?.setAttribute('aria-expanded', 'false');
-      }
-    }
-
     const live = $('#timerLive');
     if (live) {
       live.textContent = `${running ? 'En curso' : 'Pausado'}: ${block.label}, ${formatTime(remainingSec)} restantes`;
@@ -392,12 +476,14 @@
     $$('.block-row').forEach((el, i) => el.classList.toggle('is-current', i === currentBlockIndex));
   }
 
+  function hasSpeedBasis() { return Boolean(settings.runSpeedConfirmed || plan?.intake?.runSpeed); }
+
   function renderIntensityUi(block) {
     const speedEl = $('#timerSpeed');
     const effortEl = $('#timerEffort');
     if (!speedEl) return;
-    const outdoor = sessionEnvironment === 'outdoor';
-    if (outdoor && (block.type === 'run' || block.type === 'walk')) {
+    const outdoor = sessionEnvironment === 'outdoor' || !hasSpeedBasis();
+    if (outdoor) {
       speedEl.hidden = true;
       if (effortEl) {
         effortEl.hidden = false;
@@ -412,241 +498,116 @@
     if (effortEl) effortEl.hidden = true;
   }
 
-  function startTimer({ announceFirst = false } = {}) {
+  async function startTimer({ announceFirst = false } = {}) {
     if (running) return pauseTimer();
-    if (!sessionEnvironment) {
-      showToast('Elegí si entrenás en cinta o al aire libre');
-      return;
-    }
-    if (finishedAnnounced) resetTimer({ quiet: true });
+    if (!hasStarted && Coach().getFocusSession(plan)?.kind !== 'run') { showToast('Mantené la recuperación o completá tu punto de partida antes de correr.'); navTo('home'); return; }
+    if (!sessionEnvironment) { showToast('Elegí cinta o aire libre antes de comenzar'); return; }
+    if (!await acquireWorkoutLease()) { showToast('El entrenamiento está abierto en otra pestaña. Continuá allí.'); return; }
+    if (runtimeState()?.finished) { openCloseDialogFromTimer(); return; }
+    $('#morePanel').hidden = true;
+    $('#moreToggle').setAttribute('aria-expanded', 'false');
     const freshStart = !hasStarted;
-    hasStarted = true;
     if (freshStart) {
-      maxCompletedRunBlockSec = 0;
-      currentRunCompletedSec = 0;
-      const run = activeRunSession();
-      activePlanSessionId = run?.id || null;
+      workoutRuntime = new window.WorkoutRuntime(buildWorkout());
+      activePlanSessionId = activeRunSession()?.id || null;
+      activePrescriptionSnapshot = structuredClone(activeRunSession());
+      activeAttemptId = crypto.randomUUID();
     }
-    running = true;
-    ensureAudio();
-    warmSpeech();
-    requestWakeLock();
-    clearInterval(timerId);
-    timerId = setInterval(syncTimer, 100);
-    updateTimerUI();
-    if (announceFirst || freshStart) {
-      blockStart(workout[currentBlockIndex], { announce: true });
-    } else {
-      const now = performance.now();
-      runStartedAt = now;
-      blockDeadline = now + remainingMs;
-      transitionLock = false;
-      updateTimerUI();
-    }
-    syncTimer();
+    workoutRuntime.resume(Date.now());
+    applyRuntimeState();
+    ensureAudio(); warmSpeech(); requestWakeLock();
+    clearInterval(timerId); timerId = setInterval(syncTimer, 100);
+    if (announceFirst || freshStart) announceCurrentBlock();
+    persistActiveWorkout(true); updateTimerUI();
   }
 
   function pauseTimer() {
-    if (transitionLock) {
-      speakGeneration += 1;
-      if ('speechSynthesis' in window) {
-        try { speechSynthesis.cancel(); } catch { /* */ }
-      }
-      remainingMs = blockBudgetMs(workout[currentBlockIndex] || { seconds: remainingMs / 1000 });
-      originalBlockMs = remainingMs;
-      transitionLock = false;
-    } else if (running) {
-      remainingMs = getLiveRemainingMs();
-      elapsedMs = getLiveElapsedMs();
-    }
+    if (workoutRuntime) { workoutRuntime.pause(Date.now()); applyRuntimeState(); }
     running = false;
-    runStartedAt = null;
-    blockDeadline = null;
-    clearInterval(timerId);
-    timerId = null;
-    updateTimerUI();
+    clearInterval(timerId); timerId = null;
+    persistActiveWorkout(true); updateTimerUI();
   }
 
   /** preTransition: últimos 5 s del bloque actual. */
-  function fireCountdownBeeps(remainingSecFloor) {
-    if (!settings.countdown || transitionLock) return;
-    for (let s = 5; s >= 1; s--) {
-      if (remainingSecFloor <= s && remainingSecFloor > 0 && !countdownBeepsFired.has(s)) {
-        countdownBeepsFired.add(s);
-        beep(s === 1 ? 880 : 640, 85);
-      }
-    }
+  function fireCountdownBeeps(seconds) {
+    if (!settings.countdown || transitionLock || seconds < 1 || seconds > 5 || countdownBeepsFired.has(seconds)) return;
+    // Emit only the current second: never replay missed alerts in a burst.
+    countdownBeepsFired.add(seconds);
+    window.dispatchEvent(new CustomEvent('4running:timer-cue', { detail: { type: 'countdown', seconds } }));
+    beep(seconds === 1 ? 880 : 640, 85);
+  }
+
+  function announceCurrentBlock({ resumed = false } = {}) {
+    const block = workout[currentBlockIndex];
+    if (!block) return;
+    countdownBeepsFired.clear();
+    window.dispatchEvent(new CustomEvent('4running:timer-cue', { detail: { type: 'block', index: currentBlockIndex, phase: block.type } }));
+    playChangeTone(block);
+    speakGeneration += 1;
+    speakBlock(block, null, resumed ? Math.ceil(getLiveRemainingMs() / 1000) : null);
   }
 
   function syncTimer() {
-    if (!running || transitionLock) {
-      updateTimerUI();
-      return;
+    if (!workoutRuntime) return;
+    const state = workoutRuntime.update(Date.now());
+    const previousIndex = currentBlockIndex;
+    applyRuntimeState(state);
+    if (state.finished) { finishWorkout(); return; }
+    if (running && previousIndex !== currentBlockIndex) {
+      if (!document.hidden) announceCurrentBlock({ resumed: state.remainingMs < blockBudgetMs(workout[currentBlockIndex]) - 500 });
+      else countdownBeepsFired.clear();
     }
-    const remMs = getLiveRemainingMs();
-    fireCountdownBeeps(Math.ceil(remMs / 1000));
-    if (remMs <= 0) transition();
-    else updateTimerUI();
+    if (running && !document.hidden) fireCountdownBeeps(Math.ceil(state.remainingMs / 1000));
+    persistActiveWorkout(); updateTimerUI();
   }
 
-  /**
-   * transition: el bloque previo llegó a 0.
-   * No arranca el reloj del nuevo bloque hasta blockStart.
-   */
-  function transition() {
-    if (transitionLock) return;
-    noteRunProgressOnLeave();
-    if (currentBlockIndex >= workout.length - 1) {
-      finishWorkout();
-      return;
-    }
-    transitionLock = true;
-    if (running) {
-      elapsedMs = getLiveElapsedMs();
-      runStartedAt = performance.now();
-    }
-    armBlock(currentBlockIndex + 1);
-    blockDeadline = null;
-    updateTimerUI();
-    blockStart(workout[currentBlockIndex], { announce: true });
-  }
-
-  /**
-   * blockStart: UI ya muestra el bloque nuevo a duración completa.
-   * Sonido de cambio → voz del bloque → recién ahí corre el deadline.
-   */
-  function blockStart(block, { announce = true } = {}) {
-    if (!block) {
-      transitionLock = false;
-      return;
-    }
-    countdownBeepsFired.clear();
-    const beginClock = () => {
-      if (!running) {
-        transitionLock = false;
-        updateTimerUI();
-        return;
-      }
-      const now = performance.now();
-      runStartedAt = now;
-      remainingMs = blockBudgetMs(block);
-      originalBlockMs = remainingMs;
-      blockDeadline = now + remainingMs;
-      transitionLock = false;
-      updateTimerUI();
-    };
-
-    if (!announce) {
-      beginClock();
-      return;
-    }
-
-    playChangeTone(block);
-    const gen = ++speakGeneration;
-    window.setTimeout(() => {
-      if (gen !== speakGeneration) return;
-      speakBlock(block, () => {
-        if (gen !== speakGeneration) return;
-        beginClock();
-      });
-    }, settings.sound ? 200 : 40);
-  }
-
-  async function nextBlock() {
-    if (transitionLock) return;
-    if (currentBlockIndex >= workout.length - 1) return finishWorkout();
-    if (hasStarted) {
-      const ok = await askConfirm({
-        title: '¿Pasar al bloque siguiente?',
-        body: 'El cronómetro de este bloque se corta.',
-        ok: 'Siguiente bloque',
-        cancel: 'Volver'
-      });
-      if (!ok) return;
-    }
-    noteRunProgressOnLeave();
+  async function moveBlock(direction) {
+    if (!workoutRuntime || transitionLock) return;
+    const target = currentBlockIndex + direction;
+    if (target < 0) return;
     const wasRunning = running;
-    if (wasRunning) {
-      elapsedMs = getLiveElapsedMs();
-      runStartedAt = performance.now();
-    }
+    if (hasStarted) pauseTimer();
     transitionLock = true;
-    armBlock(currentBlockIndex + 1);
-    blockDeadline = null;
-    updateTimerUI();
-    if (wasRunning) blockStart(workout[currentBlockIndex], { announce: true });
-    else {
-      transitionLock = false;
-      updateTimerUI();
+    const ok = !hasStarted || await askConfirm({ title: direction > 0 ? '¿Pasar al bloque siguiente?' : '¿Volver al bloque anterior?', body: 'El reloj queda en pausa mientras elegís. Conservaremos todos los tramos realizados.', ok: direction > 0 ? 'Siguiente bloque' : 'Bloque anterior', cancel: 'Volver' });
+    transitionLock = false;
+    if (ok) {
+      if (target >= workout.length) { openCloseDialogFromTimer(); return; }
+      workoutRuntime.enterBlock(target, Date.now()); applyRuntimeState(); countdownBeepsFired.clear();
     }
+    if (wasRunning) {
+      workoutRuntime.resume(Date.now()); applyRuntimeState();
+      clearInterval(timerId); timerId = setInterval(syncTimer, 100);
+      if (ok) announceCurrentBlock();
+    }
+    persistActiveWorkout(true); updateTimerUI(); renderBlockList();
   }
 
-  async function prevBlock() {
-    if (transitionLock) return;
-    if (currentBlockIndex <= 0) return;
-    if (hasStarted) {
-      const ok = await askConfirm({
-        title: '¿Volver al bloque anterior?',
-        body: 'El cronómetro de este bloque se corta.',
-        ok: 'Bloque anterior',
-        cancel: 'Volver'
-      });
-      if (!ok) return;
-    }
-    noteRunProgressOnLeave();
-    const wasRunning = running;
-    if (wasRunning) {
-      elapsedMs = getLiveElapsedMs();
-      runStartedAt = performance.now();
-    }
-    armBlock(currentBlockIndex - 1);
-    if (wasRunning) {
-      transitionLock = true;
-      blockDeadline = null;
-      updateTimerUI();
-      blockStart(workout[currentBlockIndex], { announce: true });
-    } else updateTimerUI();
-  }
+  function nextBlock() { return moveBlock(1); }
+  function prevBlock() { return moveBlock(-1); }
 
   function addThirty() {
-    const block = workout[currentBlockIndex];
-    if (!block) return;
-    block.extraSeconds = (block.extraSeconds || 0) + 30;
-    remainingMs = getLiveRemainingMs() + 30000;
-    originalBlockMs = blockBudgetMs(block);
-    if (running) blockDeadline = performance.now() + remainingMs;
-    const kind = block.type === 'run' ? 'correr' : block.type === 'walk' ? 'caminar' : block.label.toLowerCase();
-    showToast(`+30 s extra en ${kind}. Prescrito ${formatTime(prescribedSeconds(block))}. El plan no cambió.`);
-    audit('extra-30', { type: block.type, extraSeconds: block.extraSeconds, prescribed: prescribedSeconds(block) });
-    updateTimerUI();
+    workoutRuntime?.adjustBudget(30, Date.now()); applyRuntimeState(); persistActiveWorkout(true); updateTimerUI();
   }
 
   function subtractThirty() {
-    const block = workout[currentBlockIndex];
-    if (!block) return;
-    const live = getLiveRemainingMs();
-    const cut = Math.min(30000, live - 5000);
-    if (cut < 1000) {
-      showToast('Este bloque ya está por terminar');
-      return;
-    }
-    remainingMs = live - cut;
-    originalBlockMs = Math.max(1000, originalBlockMs - cut);
-    block.extraSeconds = Math.max(0, (block.extraSeconds || 0) - 30);
-    if (running) blockDeadline = performance.now() + remainingMs;
-    showToast(`−30 s en este bloque. Prescrito ${formatTime(prescribedSeconds(block))}.`);
-    audit('minus-30', { type: block.type, extraSeconds: block.extraSeconds, prescribed: prescribedSeconds(block) });
-    updateTimerUI();
+    if (getLiveRemainingMs() <= 5000) return;
+    workoutRuntime?.adjustBudget(-Math.min(30, getLiveRemainingMs() / 1000 - 5), Date.now()); applyRuntimeState(); persistActiveWorkout(true); updateTimerUI();
   }
 
   function prepareCloseForm({ external = false, fromTimer = false } = {}) {
     $('#sessionForm').reset();
+    $('#manualContinuousWrap').hidden = fromTimer;
+    $('#manualContinuous').value = '';
+    $('#sessionMaxRunBlockSec').value = '';
     $('#sessionExternal').value = external ? '1' : '0';
     $('#sessionFromTimer').value = fromTimer ? '1' : '0';
     $('#closeContext').hidden = !external;
     $('#resultQuestion').textContent = external
       ? '¿Registramos esta actividad?'
       : '¿Completaste la prescripción?';
+    $('#sessionDialog').dataset.attemptId = fromTimer && activeAttemptId ? activeAttemptId : crypto.randomUUID();
+    if ($('#sessionTalk')) $('#sessionTalk').value = 'unknown';
+    if ($('#observedSummary')) $('#observedSummary').textContent = '';
     if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#sessionPlanId').value = external ? '' : (activePlanSessionId || activeRunSession()?.id || '');
     $('#sessionDate').value = localDateISO();
@@ -675,7 +636,8 @@
 
   function openCloseDialogFromTimer() {
     const distance = getCompletedDistanceKm();
-    const maxSec = Math.max(maxCompletedRunBlockSec, currentRunCompletedSec);
+    const observed = observedWorkout();
+    const maxSec = observed.maxRunBlockSec;
     const extra = totalExtraSeconds();
     prepareCloseForm({ fromTimer: true });
     const run = activeRunSession();
@@ -692,7 +654,9 @@
       $('#sessionExtraLabel').hidden = false;
       $('#sessionExtraLabel').textContent = `Incluye ${extra} s extra marcados en la sesión. La prescripción del plan no cambió.`;
     }
-    const doneAll = finishedAnnounced && currentBlockIndex >= workout.length - 1;
+    $('#observedSummary').textContent = `Observado: ${observed.completedBlocks}/${observed.blocks.length} bloques · ${(observed.runSeconds / 60).toFixed(1)} min corriendo · ${(observed.walkSeconds / 60).toFixed(1)} min caminando. Distancia y ritmo: estimados, sin GPS.`;
+    $('#finishHero > p').textContent = observed.completedBlocks === observed.blocks.length ? 'Sesión completada' : 'Lo que hiciste hasta ahora';
+    const doneAll = observed.completedBlocks === observed.blocks.length;
     const yes = document.querySelector('input[name="prescriptionDone"][value="yes"]');
     if (doneAll && yes) yes.checked = true;
     if ($('#finishHero')) {
@@ -730,7 +694,7 @@
       return false;
     }
     if (step === 1 && !selectedValue('sessionRpe')) {
-      showToast('Elegí un RPE del 1 al 10');
+      showToast('Elegí un esfuerzo del 0 al 10');
       return false;
     }
     if (step === 1 && !selectedValue('sessionPain')) {
@@ -747,41 +711,22 @@
   function finishWorkout() {
     if (finishedAnnounced) return;
     finishedAnnounced = true;
-    noteRunProgressOnLeave();
-    elapsedMs = getLiveElapsedMs();
-    remainingMs = 0;
-    pauseTimer();
-    beep(920, 140);
-    setTimeout(() => beep(1120, 180), 170);
+    pauseTimer(); persistActiveWorkout(true);
+    beep(920, 140); setTimeout(() => beep(1120, 180), 170);
     speak('Entrenamiento completado');
-    showToast('Sesión completada. Dos pasos y listo.');
     setTimeout(openCloseDialogFromTimer, 450);
   }
 
   function resetTimer({ quiet = false } = {}) {
-    speakGeneration += 1;
-    transitionLock = false;
-    if (running) {
-      remainingMs = getLiveRemainingMs();
-      elapsedMs = getLiveElapsedMs();
-    }
-    running = false;
-    runStartedAt = null;
-    blockDeadline = null;
-    clearInterval(timerId);
-    timerId = null;
-    currentBlockIndex = 0;
-    elapsedMs = 0;
-    hasStarted = false;
-    finishedAnnounced = false;
-    maxCompletedRunBlockSec = 0;
-    currentRunCompletedSec = 0;
-    workout = buildWorkout();
-    remainingMs = workout[0].seconds * 1000;
-    originalBlockMs = remainingMs;
+    speakGeneration += 1; transitionLock = false;
+    clearInterval(timerId); timerId = null;
+    clearActiveWorkout();
+    workoutRuntime = new window.WorkoutRuntime(buildWorkout());
+    applyRuntimeState();
+    hasStarted = false; finishedAnnounced = false;
+    maxCompletedRunBlockSec = 0; currentRunCompletedSec = 0;
     countdownBeepsFired.clear();
-    renderWorkout();
-    updateTimerUI();
+    renderWorkout(); updateTimerUI();
     if (!quiet) showToast('Temporizador reiniciado');
   }
 
@@ -985,14 +930,14 @@
     return `${wholeMinutes === 1 ? '1 minuto' : `${wholeMinutes} minutos`} ${rem} segundos`;
   }
 
-  function speakBlock(block, onEnd) {
-    const dur = formatSpokenDuration(prescribedSeconds(block));
+  function speakBlock(block, onEnd, remainingSeconds = null) {
+    const dur = formatSpokenDuration(remainingSeconds ?? prescribedSeconds(block));
     const verb = block.type === 'run' ? 'Correr'
       : block.type === 'walk' ? 'Caminar'
       : block.type === 'cool' ? 'Enfriar'
       : 'Calentar';
     let line = `${verb} durante ${dur}.`;
-    if (sessionEnvironment === 'treadmill') {
+    if (sessionEnvironment === 'treadmill' && hasSpeedBasis()) {
       line = `${verb} durante ${dur} a ${String(block.speed).replace('.', ',')} kilómetros por hora.`;
     } else if (sessionEnvironment === 'outdoor' && block.type === 'run') {
       line = `${verb} durante ${dur}. Ritmo cómodo.`;
@@ -1000,7 +945,7 @@
     speak(line, onEnd);
   }
 
-  /** @deprecated usar blockStart / speakBlock */
+  /** Announce an already selected block. */
   function cueBlock(block) {
     playChangeTone(block);
     speakBlock(block);
@@ -1009,7 +954,7 @@
   function applyBlock(index, announce = false) {
     armBlock(index);
     updateTimerUI();
-    if (announce) blockStart(workout[currentBlockIndex], { announce: true });
+    if (announce) announceCurrentBlock();
   }
 
   function environmentLabel(env) {
@@ -1037,6 +982,8 @@
     const codes = entry?.reasonCode || [];
     const rpe = entry?.rpe;
     const human = window.PaceProduct?.humanDecisionCopy?.(action || progression, { rpe }) || null;
+    if (action === 'record_only') return { cls: '', title: 'Intento guardado · plan actual conservado', summary: entry.decisionReason || 'Guardamos lo realizado sin cambiar otra prescripción.', chips: ['Prescripción anterior'] };
+    if (entry?.decisionReason && entry?.progression) return { cls: entry.progression === 'advance' ? 'advance' : entry.progression, title: entry.progression === 'recovery' ? 'Recuperación' : entry.progression === 'repeat' ? 'Repetir la prescripción' : 'Avance gradual', summary: entry.decisionReason, chips: [entry.execution === 'aborted' ? 'Intento incompleto guardado' : 'Sesión completada', ...(rpe != null ? [`Esfuerzo ${rpe}/10`] : [])] };
     if (entry?.source === 'external') {
       return {
         cls: '',
@@ -1095,7 +1042,7 @@
         chips: rpe != null ? [`Esfuerzo ${rpe}/10`, 'Rendimiento'] : ['Rendimiento']
       };
     }
-    if (action === 'consolidate' || codes.includes('RPE_MID_CONSOLIDATE') || codes.includes('LOW_EVIDENCE') || codes.includes('RPE_6_HOLD')) {
+    if (action === 'consolidate') {
       return {
         cls: 'advance',
         title: human?.headline || 'Consolidar',
@@ -1231,7 +1178,9 @@
     let nextLine = '';
     if (nextRun?.structure) {
       const st = nextRun.structure;
-      if (!st.walkSeconds) {
+      if (st.runSeconds === 0) {
+        nextLine = Coach().describeStructure(st);
+      } else if (!st.walkSeconds) {
         nextLine = `Carrera continua · ${formatMinutesLabel(st.runSeconds)}`;
       } else {
         nextLine = `${formatMinutesLabel(st.runSeconds)} correr / ${formatMinutesLabel(st.walkSeconds)} caminar ×${st.reps}`;
@@ -1410,6 +1359,7 @@
   }
 
   function homeSpeedText(kind, kmh) {
+    if (!hasSpeedBasis()) return kind === 'run' ? 'Esfuerzo cómodo' : 'Caminata cómoda';
     if (!window.PaceProduct) return speedLabel(kmh);
     return window.PaceProduct.speedOrEffortLabel(kmh, { outdoor: isOutdoorUi(), kind });
   }
@@ -1473,7 +1423,7 @@
   function renderHistory() {
     const sorted = sortedLogs();
     $('#historyCount').textContent = sorted.length;
-    const bestDist = sorted.filter(s => typeof s.distanceKm === 'number' && s.source !== 'external').reduce((m, s) => Math.max(m, s.distanceKm), 0);
+    const bestDist = sorted.filter(s => typeof s.distanceKm === 'number' && s.distanceEstimated === false && s.source !== 'external').reduce((m, s) => Math.max(m, s.distanceKm), 0);
     $('#bestDistance').innerHTML = bestDist ? `${bestDist.toFixed(2).replace('.', ',')} <em>km</em>` : '—';
     const bestCont = sorted.filter(s => s.source !== 'external').reduce((m, s) => Math.max(m, Number(s.maxRunBlockSec) || 0), 0);
     $('#bestContinuous').textContent = bestCont ? Coach().formatBlock(bestCont) : '—';
@@ -1506,7 +1456,7 @@
       const kind = historyKind(s);
       const bits = [];
       if (s.time) bits.push(s.time);
-      if (typeof s.distanceKm === 'number') bits.push(`${s.distanceKm.toFixed(2).replace('.', ',')} km`);
+      if (typeof s.distanceKm === 'number') bits.push(`${s.distanceKm.toFixed(2).replace('.', ',')} km${s.distanceEstimated ? ' estimados' : ' confirmados'}`);
       if (s.rpe != null) bits.push(`Esfuerzo ${s.rpe}/10`);
       const decision = decisionUserCopy(s);
       const chips = decision.chips.map(c => `<span class="history-chip">${escapeHtml(c)}</span>`).join('');
@@ -1532,7 +1482,9 @@
       ['Fecha', s.date],
       ['Tipo', historyKind(s)],
       ['Duración', s.time || '—'],
-      ['Distancia', typeof s.distanceKm === 'number' ? `${s.distanceKm.toFixed(2).replace('.', ',')} km` : '—'],
+      ['Distancia', typeof s.distanceKm === 'number' ? `${s.distanceKm.toFixed(2).replace('.', ',')} km${s.distanceEstimated ? ' · estimada' : ' · confirmada'}` : '—'],
+      ['Observado', s.blocks ? `${s.completedBlocks}/${s.blocks.length} bloques · ${(s.runSeconds / 60).toFixed(1)} min corriendo · ${(s.walkSeconds / 60).toFixed(1)} min caminando` : 'Registro manual · sin bloques medidos'],
+      ['Conversación', s.talkTest === 'yes' ? 'Podía conversar' : s.talkTest === 'no' ? 'No podía conversar' : 'Sin confirmar'],
       ...paceRowsForLog(s),
       ['Lugar', environmentLabel(env)],
       ['Máx. continuo', s.maxRunBlockSec != null ? Coach().formatBlock(s.maxRunBlockSec) : '—'],
@@ -1586,7 +1538,11 @@
       hasPain: selectedValue('onboardPain') === 'yes',
       painNote: $('#onboardPainNote')?.value?.trim() || '',
       runSpeed: parseOptionalNumber($('#onboardRunSpeed')?.value),
-      raceDate: $('#onboardRaceDate')?.value || null
+      raceDate: $('#onboardHasRace')?.checked ? $('#onboardRaceDate')?.value || null : null,
+      recentActivity: $('#onboardActivity').value,
+      walkTolerance: $('#onboardWalk').value,
+      availableMinutes: Number($('#onboardMinutes').value),
+      assessment: $('#onboardAssessment').value
     };
   }
 
@@ -1594,18 +1550,16 @@
     if (!window.PaceAdaptive) return;
     const draft = collectOnboardingDraft();
     const intake = window.PaceAdaptive.normalizeIntake(draft);
-    const st = window.PaceAdaptive.startingStructureForAbility(intake.continuousAbility, {
-      conservative: intake.hasPain
-    });
+    const st = window.PaceAdaptive.initialPrescription(intake);
     const body = $('#onboardPreviewBody');
     const note = $('#onboardPreviewNote');
-    if (body) body.textContent = window.PaceAdaptive.describeStructure(st);
+    if (body) body.textContent = intake.hasPain ? 'Evaluación pospuesta: revisá la molestia limitante antes de correr.' : `${window.PaceAdaptive.describeStructure(st)} · ${Math.round(window.PaceAdaptive.metrics(st).totalSec / 60)} min`;
     if (note) {
       const stageLabel = ({
         1: 'Caminar', 2: 'Caminar y trotar', 3: 'Desarrollo continuo',
         4: 'Completar 5K', 5: 'Mejorar rendimiento', 6: 'Objetivos posteriores'
       })[intake.intakeStage] || '';
-      note.textContent = `${stageLabel} · ${intake.sessionsPerWeek} días/sem${intake.hasPain ? ' · arranque conservador por molestia' : ''}`;
+      note.textContent = `${stageLabel} · ${intake.sessionsPerWeek} días/sem. Elegimos esta carga por tu tolerancia declarada y tus ${intake.availableMinutes} minutos disponibles. ${intake.assessment === 'later' ? 'Confianza provisional hasta observar una sesión.' : 'Evaluación a esfuerzo cómodo, sin buscar tu máximo.'}`;
     }
   }
 
@@ -1641,23 +1595,38 @@
     if (dialog && !dialog.open) dialog.showModal();
   }
 
-  function finishOnboarding() {
+  async function finishOnboarding() {
     const draft = collectOnboardingDraft();
     if (draft.hasPain && !draft.painNote) {
       showToast('Indicá dónde está la molestia');
       return;
     }
     try {
+      if (draft.sessionsPerWeek === 4) {
+        const ok = await askConfirm({ title: 'Frecuencia y descanso', body: 'Cuatro días de carrera por semana no permiten dejar un día completo de descanso entre todas las sesiones. Para este plan inicial proponemos tres días de carrera. ¿Querés usar tres días?', ok: 'Usar tres días', cancel: 'Revisar días' });
+        if (!ok) { showOnboardStep(3); return; }
+        draft.requestedSessionsPerWeek = 4; draft.sessionsPerWeek = 3; draft.frequencyConfirmed = true;
+      }
       if (draft.runSpeed) {
-        settings.runSpeed = draft.runSpeed;
+        settings.runSpeed = draft.runSpeed; settings.runSpeedConfirmed = true;
         persistSettings();
       }
       if (draft.environment === 'outdoor' || draft.environment === 'treadmill') {
         settings.lastEnvironment = draft.environment;
         persistSettings();
       }
+      if (draft.assessment === 'history') {
+        const observed = window.PaceAdaptive.deriveProfile(logs || [], plan, settings);
+        if (observed.sessionsCompleted >= 2 && observed.demonstratedContinuousSec > 0) {
+          const sec = observed.demonstratedContinuousSec;
+          draft.continuousAbility = sec >= 1800 ? '30min' : sec >= 900 ? '15min' : sec >= 300 ? '5min' : '1min';
+        } else { showToast('Todavía no hay dos sesiones observadas suficientes. Creamos una propuesta provisional.'); draft.assessment = 'later'; }
+      }
+      if (draft.assessment === 'run' && ['none', 'unknown'].includes(draft.continuousAbility)) draft.assessment = 'walk';
+      if (draft.assessment === 'jog' && ['short', 'unknown'].includes(draft.walkTolerance)) { showToast('Primero confirmemos una caminata cómoda: ajustamos la evaluación.'); draft.assessment = 'walk'; }
       plan = Coach().applyIntake(draft, settings);
       logs = Coach().loadLogs();
+      await window.PaceCloud?.whenDurable?.();
       $('#onboardingDialog')?.close();
       reloadWorkoutFromPlan();
       setupDates();
@@ -1747,10 +1716,17 @@
   }
 
   function renderHome() {
+    if ($('#planOverviewList')) $('#planOverviewList').innerHTML = Coach().sortedPlanSessions(plan).filter(s => ['pending', 'rescheduled'].includes(s.status)).slice(0, 4).map(s => `<li>${escapeHtml(s.scheduledDate || 'Por programar')} · ${escapeHtml(s.kind === 'rest' ? 'Recuperación' : Coach().describeStructure(s.structure))}${s.blockedUntilRest ? ' · revisar molestia antes de volver' : ''}</li>`).join('');
+
     if (!Coach().needsOnboarding(plan) && Coach().refreshStaleFocusDates) {
       plan = Coach().refreshStaleFocusDates(plan) || plan;
     }
     const needsIntro = Coach().needsOnboarding(plan);
+    const walkOffer = !needsIntro && Coach().requestWalkToJog?.(plan, logs, settings, { confirmed: false });
+    $('#walkToJogCard').hidden = !walkOffer?.eligible || hasStarted;
+    if (walkOffer?.eligible) $('#walkToJogMessage').textContent = walkOffer.message;
+    $('#scheduleNotice').hidden = !plan?.scheduleNotice;
+    $('#scheduleNotice').textContent = plan?.scheduleNotice || '';
     const readiness = Coach().assessRaceReadiness(logs, plan);
     const focus = needsIntro ? null : Coach().getFocusSession(plan);
     const underlying = focus ? Coach().getUnderlyingPlanItem(plan, focus) : null;
@@ -1772,7 +1748,7 @@
     $('#recoveryOffer').hidden = needsIntro || !(isRun && !trainedToday && !recoveredToday);
     $('#quietActions').hidden = needsIntro || !focus;
     $('#rescheduleSession').hidden = needsIntro || !focus;
-    $('#skipSession').hidden = needsIntro || !focus;
+    $('#skipSession').hidden = needsIntro || !focus || Boolean(focus.gateForId);
 
     const scheduleNote = $('#scheduleNote');
     if (isRun && underlying?.status === 'rescheduled' && underlying.scheduledDate) {
@@ -1817,7 +1793,8 @@
       const minutes = structureDurationMin(st);
       const km = estimateStructureKm(st);
       const continuous = Number(st.walkSeconds) === 0;
-      $('#coachTitle').textContent = continuous ? 'Carrera continua' : 'Intervalos';
+      $('#coachTitle').textContent = st.runSeconds === 0 ? 'Caminata cómoda' : continuous ? 'Carrera continua' : 'Intervalos';
+      $('#sessionWhy').textContent = focus.isAssessment ? 'Evaluación cómoda: observamos lo que podés sostener, sin buscar tu máximo. Podés pasar a caminata o terminar y guardar.' : focus.justification || 'Propuesta provisional según tu punto de partida. Ajustaremos después de observarte.';
       $('#homeMinutes').textContent = String(minutes);
       $('#homeKm').textContent = km.toFixed(2).replace('.', ',');
       const cue = (sec) => formatTime(sec).replace(/^0/, '');
@@ -1826,7 +1803,7 @@
       if (focus.isControlTest) $('#coachTitle').textContent = 'Test de control';
       $('#homeWarmSpeed').textContent = homeSpeedText('warm', settings.walkSpeed);
       $('#homeReps').textContent = Number(st.walkSeconds) > 0 ? `${st.reps}×` : '1×';
-      $('#homeWorkLine').textContent = `Correr ${cue(st.runSeconds)}`;
+      $('#homeWorkLine').textContent = st.runSeconds > 0 ? `Correr ${cue(st.runSeconds)}` : 'Solo caminata';
       $('#homeWalkLine').textContent = Number(st.walkSeconds) > 0
         ? `Caminar ${cue(st.walkSeconds)}`
         : 'Carrera continua';
@@ -1961,7 +1938,7 @@
     const structure = external ? null : structureForSessionId(planId);
     return window.PaceAdaptive.computeSessionPaceMetrics({
       elapsedSec,
-      distanceKm,
+      distanceKm: $('#sessionDistanceEstimated').checked ? null : distanceKm,
       structure,
       speeds: settings
     });
@@ -1993,7 +1970,7 @@
     const runSpeed = formatSpeedKmh(metrics.runSpeedKmh);
     body.innerHTML = `
       <div><span>Ritmo del ciclo</span><strong>${escapeHtml(cycleLabel)}</strong></div>
-      <div><span>${metrics.isContinuous ? 'Velocidad media' : 'Ritmo solo carrera'}</span><strong>${escapeHtml(metrics.isContinuous ? cycleSpeed : runLabel)}</strong></div>
+      <div><span>${metrics.isContinuous ? 'Velocidad media' : 'Ritmo solo carrera · estimado'}</span><strong>${escapeHtml(metrics.isContinuous ? cycleSpeed : runLabel)}</strong></div>
       <div><span>Km del ciclo</span><strong>${escapeHtml(String(metrics.cycleKm).replace('.', ','))} km</strong></div>
       <div><span>${metrics.isContinuous ? 'Ritmo global' : 'Vel. carrera'}</span><strong>${escapeHtml(metrics.isContinuous ? cycleLabel : runSpeed)}</strong></div>
     `;
@@ -2014,9 +1991,9 @@
       rows.push(['Ritmo ciclo (sin warm/cool)', `${m.cyclePaceLabel}${m.cycleSpeedKmh ? ` · ${formatSpeedKmh(m.cycleSpeedKmh)}` : ''}`]);
     }
     if (m.runPaceLabel && !m.isContinuous) {
-      rows.push(['Ritmo solo carrera', `${m.runPaceLabel}${m.runSpeedKmh ? ` · ${formatSpeedKmh(m.runSpeedKmh)}` : ''}`]);
+      rows.push(['Ritmo solo carrera · estimado', `${m.runPaceLabel}${m.runSpeedKmh ? ` · ${formatSpeedKmh(m.runSpeedKmh)}` : ''}`]);
     }
-    if (m.cycleKm != null) rows.push(['Distancia del ciclo', `${String(m.cycleKm).replace('.', ',')} km`]);
+    if (m.cycleKm != null) rows.push(['Distancia del ciclo · estimada', `${String(m.cycleKm).replace('.', ',')} km`]);
     return rows;
   }
 
@@ -2086,8 +2063,10 @@
       }
 
       const date = $('#sessionDate').value || localDateISO();
-      const id = `${date}-${Date.now()}`;
-      const prescriptionCompleted = done === 'yes';
+      const id = fromTimer && activeAttemptId ? activeAttemptId : $('#sessionDialog').dataset.attemptId || crypto.randomUUID();
+      $('#sessionDialog').dataset.attemptId = id;
+      const observation = fromTimer ? observedWorkout() : null;
+      const prescriptionCompleted = observation ? observation.completedBlocks === observation.blocks.length : done === 'yes';
       const typeValue = $('#sessionType').value;
       const environment = typeValue === 'Cinta' ? 'treadmill'
         : typeValue === 'Exterior' ? 'outdoor'
@@ -2100,13 +2079,15 @@
       const structure = external ? null : structureForSessionId(planSessionId);
       const paceMetrics = window.PaceAdaptive?.computeSessionPaceMetrics({
         elapsedSec,
-        distanceKm,
+        distanceKm: $('#sessionDistanceEstimated').checked ? null : distanceKm,
         structure,
         speeds: settings
       }) || null;
+      if (!fromTimer) $('#sessionMaxRunBlockSec').value = $('#manualContinuous').value;
       const log = {
         id,
         date,
+        createdAt: new Date().toISOString(),
         type: typeValue,
         environment,
         planSessionId,
@@ -2114,7 +2095,15 @@
         elapsedSec: elapsedSec || null,
         distanceKm,
         distanceEstimated: $('#sessionDistanceEstimated').checked,
-        maxRunBlockSec: parseOptionalNumber($('#sessionMaxRunBlockSec').value),
+        maxRunBlockSec: observation ? Math.round(observation.maxRunBlockSec) : parseOptionalNumber($('#sessionMaxRunBlockSec').value),
+        blocks: observation?.blocks || null,
+        ledger: observation?.ledger || null,
+        prescriptionSnapshot: fromTimer ? activePrescriptionSnapshot?.structure || null : null,
+        runSeconds: observation?.runSeconds ?? null,
+        walkSeconds: observation?.walkSeconds ?? null,
+        completedBlocks: observation?.completedBlocks ?? null,
+        talkTest: $('#sessionTalk')?.value || 'unknown',
+        isAssessment: Boolean((fromTimer ? activePrescriptionSnapshot : activeRunSession())?.isAssessment),
         couldContinue: selectedValue('couldContinue'),
         rpe: Number(rpe),
         pain,
@@ -2139,7 +2128,7 @@
         hasPace: Boolean(paceMetrics)
       });
 
-      logs.push(log);
+      if (!logs.some(existing => existing.id === log.id)) logs.push(log);
       let result = null;
 
       if (log.planSessionId && !external) {
@@ -2151,7 +2140,7 @@
         audit('session-saved', { id: log.id, planSessionId: log.planSessionId, source: log.source });
         if (result.medicalNotice || result.decision?.medicalNotice) {
           setTimeout(() => {
-            showToast('Suspendé entrenamiento y considerá evaluación profesional. PACE/01 no diagnostica.');
+            showToast('Suspendé entrenamiento y considerá evaluación profesional. 4Running no diagnostica.');
           }, 3400);
         }
       } else {
@@ -2165,12 +2154,15 @@
         persistSettings();
       }
 
+      await window.PaceCloud?.whenDurable?.();
+      clearActiveWorkout();
       closeMeasuredTime = null;
       if ($('#sessionDialog')?.open) $('#sessionDialog').close();
       $('#sessionForm').reset();
       $('#sessionFromTimer').value = '0';
       $('#sessionPainLocation').required = false;
       togglePainDetails();
+      hasStarted = false;
       reloadWorkoutFromPlan();
       renderHistory();
       renderHome();
@@ -2203,10 +2195,10 @@
       navTo('home');
       return;
     }
-    $('#adaptEyebrow').textContent = 'Entrenamiento completado';
+    $('#adaptEyebrow').textContent = log.execution === 'aborted' ? 'Intento incompleto guardado' : log.isAssessment ? 'Evaluación completada' : 'Entrenamiento completado';
     $('#adaptTime').textContent = log.time || '—';
     $('#adaptDistance').textContent = typeof log.distanceKm === 'number'
-      ? `${log.distanceKm.toFixed(2).replace('.', ',')} km`
+      ? `${log.distanceKm.toFixed(2).replace('.', ',')} km${log.distanceEstimated ? ' estimados' : ' confirmados'}`
       : '—';
     $('#adaptEffort').textContent = log.rpe != null ? `${log.rpe}/10` : '—';
     $('#adaptEffortNote').textContent = Number(log.rpe) >= 7 ? 'Muy exigente' : Number(log.rpe) <= 5 ? 'Cómodo' : 'Moderado';
@@ -2227,9 +2219,9 @@
           : (pace.runKm != null ? `${String(pace.runKm).replace('.', ',')} km corriendo` : 'solo segmentos run');
         $('#adaptCycleSpeed').textContent = formatSpeedKmh(pace.cycleSpeedKmh || pace.overallSpeedKmh);
         $('#adaptPaceHint').textContent = pace.distanceSource === 'attributed'
-          ? 'Ritmo del trabajo real (sin calentamiento ni enfriamiento), repartiendo la distancia por cada bloque.'
+          ? 'Estimaciones por reparto de distancia según velocidades declaradas. Los ritmos de carrera y caminata no son mediciones.'
           : pace.distanceSource === 'estimated'
-            ? 'Ritmos estimados con tus velocidades de ajustes (sin distancia confirmada).'
+            ? 'Ritmos y distancia estimados con velocidades de ajustes. No son mediciones ni determinan el avance.'
             : 'Ritmo global tiempo ÷ distancia.';
       } else {
         pacePanel.hidden = true;
@@ -2240,8 +2232,8 @@
     action.className = `adapt-action ${adapt.cls}`;
     const act = adapt.action || result.action;
     const human = window.PaceProduct?.humanDecisionCopy?.(act, { rpe: log.rpe, nextLine: adapt.nextLine });
-    const headline = human?.headline || adapt.headline;
-    const body = human?.body || adapt.body;
+    const headline = act === 'record_only' ? 'Intento guardado · plan actual conservado' : human?.headline || adapt.headline;
+    const body = result.decision?.reason || adapt.body || human?.body;
     const changeHtml = (adapt.changeLines || []).length
       ? `<ul class="adapt-changes">${adapt.changeLines.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
       : '';
@@ -2255,7 +2247,7 @@
       ? `<p class="adapt-interp">${escapeHtml(adapt.interpretation)}</p>`
       : '';
     const speed = adapt.speedSuggestion;
-    const speedHtml = speed
+    const speedHtml = speed && plan?.intake?.runSpeed
       ? `<div class="adapt-speed" id="adaptSpeedBox" data-speed-action="${escapeHtml(speed.action || 'keep')}">
           <p>${escapeHtml(speed.message || '')}</p>
           ${speed.action === 'suggest_up' && speed.suggestedKmh != null
@@ -2268,8 +2260,8 @@
       : '';
     action.innerHTML = `<strong>${escapeHtml(headline)}</strong><p>${escapeHtml(body)}</p>${prevHtml}${nextAccum}${changeHtml}${interpHtml}${speedHtml}`;
     $('#adaptNext').textContent = adapt.nextLine;
-    $('#adaptHint').textContent = human?.nextHint
-      || (String(act || '').startsWith('progress')
+    $('#adaptHint').textContent = result.next?.gateForId ? 'Mantené la pausa y revisá la molestia antes de volver a correr.' : result.next?.kind === 'rest' ? 'Ahora toca recuperación. Registrala en Hoy antes del próximo entrenamiento.'
+      : (String(act || '').startsWith('progress')
         ? 'Subimos de a poco. Escuchá cómo responde tu cuerpo la próxima vez.'
         : act === 'consolidate'
           ? 'Repetir bien también es progreso.'
@@ -2333,11 +2325,8 @@
     $('#sessionDistance').value = km ? km.toFixed(2) : '';
     $('#sessionDistanceEstimated').checked = true;
     syncDistanceEstimateUi();
-    const cont = st?.runSeconds || '';
-    $('#sessionMaxRunBlockSec').value = cont ? String(cont) : '';
-    $('#sessionMaxRunBlockLabel').textContent = cont
-      ? `${Coach().formatBlock(cont)} (prescrito; corregí si corriste más/menos)`
-      : 'Indicá el mayor tramo continuo que corriste.';
+    $('#sessionMaxRunBlockSec').value = '';
+    $('#sessionMaxRunBlockLabel').textContent = 'Por confirmar: registrá tu mayor tramo continuo real; no lo inferimos de lo prescrito.';
     if ($('#finishHero')) $('#finishHero').hidden = true;
     $('#closeContext').hidden = false;
     $('#closeContext').textContent = 'Registro manual de la sesión del plan. Completá RPE y confirmá el tiempo (ya viene estimado). El botón Guardar queda fijo abajo.';
@@ -2357,8 +2346,6 @@
     noteRunProgressOnLeave();
     elapsedMs = getLiveElapsedMs();
     pauseTimer();
-    finishedAnnounced = true;
-    remainingMs = 0;
     openCloseDialogFromTimer();
   }
 
@@ -2380,7 +2367,7 @@
     if ($('#accountDisplayName')) $('#accountDisplayName').value = account?.displayName || '';
     if ($('#preferredSurfaceSelect')) $('#preferredSurfaceSelect').value = account?.preferredSurface || 'both';
     if ($('#remindersToggle')) $('#remindersToggle').checked = Boolean(account?.remindersEnabled);
-    if ($('#accountIdNote')) $('#accountIdNote').textContent = `ID local: ${account?.id || '—'}`;
+    if ($('#accountIdNote')) $('#accountIdNote').textContent = 'Perfil de entrenamiento asociado a tu cuenta';
     if ($('#lastBackupNote')) {
       $('#lastBackupNote').textContent = account?.lastBackupAt
         ? `Último respaldo: ${account.lastBackupAt.slice(0, 16).replace('T', ' ')}`
@@ -2415,7 +2402,7 @@
     syncToggleButtons();
   }
 
-  function saveSettings(e) {
+  async function saveSettings(e) {
     e.preventDefault();
     const walk = Number($('#walkSpeed').value);
     const run = Number($('#runSpeed').value);
@@ -2425,7 +2412,11 @@
       showToast(speedError);
       return;
     }
+    let frequency = Number($('#sessionsPerWeekSelect')?.value || 3);
+    if (frequency === 4) { const ok = await askConfirm({ title: 'Frecuencia y descanso', body: 'Este plan conserva un día completo de descanso entre carreras. Usaremos tres días de carrera por semana.', ok: 'Usar tres días', cancel: 'Volver' }); if (!ok) return; frequency = 3; }
     settings = {
+      ...settings,
+      runSpeedConfirmed: true,
       walkSpeed: walk,
       runSpeed: run,
       coolSpeed: cool,
@@ -2446,7 +2437,7 @@
       plan = Coach().updatePlanPreferences(plan, {
         goalType: $('#goalTypeSelect')?.value,
         raceDate: $('#raceDateInput')?.value || null,
-        sessionsPerWeek: Number($('#sessionsPerWeekSelect')?.value || 3)
+        sessionsPerWeek: frequency
       }, logs, settings);
       Coach().savePlan(plan);
     }
@@ -2454,6 +2445,7 @@
     setupDates();
     renderSettings();
     renderHome();
+    await window.PaceCloud?.whenDurable?.();
     window.PaceProduct?.track?.('settings_saved');
     showToast('Preferencias guardadas');
   }
@@ -2477,7 +2469,7 @@
     }
     settings.walkSpeed = walk;
     settings.runSpeed = run;
-    settings.coolSpeed = cool;
+    settings.coolSpeed = cool; settings.runSpeedConfirmed = true;
     persistSettings();
     refreshWorkoutSpeeds();
     renderSettings();
@@ -2543,20 +2535,20 @@
     }
     const isSync = data?.format === 'pace01.sync.v1';
     if (!data || (!Array.isArray(data.logs) && !isSync) || (!Array.isArray(data.plan?.sessions) && !isSync)) {
-      showToast('Ese archivo no tiene plan e historial de PACE/01');
+      showToast('Ese archivo no tiene plan e historial de 4Running');
       return;
     }
     const ok = await askConfirm({
       title: isSync ? '¿Importar paquete de sync?' : '¿Restaurar estos datos?',
-      body: 'Reemplazan el plan y el historial de este dispositivo.',
+      body: `Se importarán a ${$('#cloudEmail').textContent}. Conservaremos tu plan activo y uniremos el historial sin duplicar identificadores.`,
       ok: isSync ? 'Importar' : 'Restaurar',
       cancel: 'Volver',
       danger: true
     });
     if (!ok) return;
     try {
-      if (isSync && window.PaceProduct) {
-        window.PaceProduct.applySyncPack(data);
+      if (window.PaceProduct) {
+        window.PaceProduct.applySyncPack(data, { mergeLogs: true, keepPlan: true });
         settings = loadSettings();
         account = window.PaceProduct.loadAccount();
       } else {
@@ -2695,6 +2687,40 @@
   }
 
   function initEvents() {
+    const closeCloudSession = $('#logout').onclick;
+    $('#logout').onclick = async () => {
+      if (hasStarted && activeAttemptId) {
+        pauseTimer();
+        const review = await askConfirm({ title: 'Tu entrenamiento está pendiente de guardar', body: 'Conservamos el cronómetro. Revisá y guardá lo realizado antes de cerrar tu cuenta.', ok: 'Revisar y guardar', cancel: 'Volver' });
+        if (review) { navTo('train'); openCloseDialogFromTimer(); }
+        return;
+      }
+      return closeCloudSession?.();
+    };
+
+    window.addEventListener('pagehide', () => persistActiveWorkout(true));
+    window.addEventListener('4running:state-updated', () => {
+      settings = loadSettings(); account = window.PaceProduct.loadAccount();
+      plan = Coach().loadPlan(); logs = Coach().loadLogs();
+      if (!hasStarted) { workoutRuntime = new window.WorkoutRuntime(buildWorkout()); applyRuntimeState(); }
+      renderHome(); renderHistory(); renderSettings();
+    });
+    $('#resumeRecovered').addEventListener('click', () => {
+      $('#workoutRecoveryDialog').close(); navTo('train');
+      if (runtimeState()?.finished) openCloseDialogFromTimer(); else startTimer();
+    });
+    $('#saveRecovered').addEventListener('click', () => { $('#workoutRecoveryDialog').close(); navTo('train'); openCloseDialogFromTimer(); });
+    $('#tryJogAssessment').addEventListener('click', async () => {
+      const preview = Coach().requestWalkToJog(plan, logs, settings, { confirmed: false });
+      if (!preview.eligible) { showToast(preview.message); return; }
+      const ok = await askConfirm({ title: '¿Probamos un trote corto?', body: preview.message, ok: 'Probar la evaluación', cancel: 'Seguir caminando' });
+      if (!ok) return;
+      const out = Coach().requestWalkToJog(plan, logs, settings, { confirmed: true });
+      if (!out.changed) { showToast(out.message); return; }
+      plan = out.plan; await window.PaceCloud?.whenDurable?.();
+      reloadWorkoutFromPlan(); renderHome(); renderSettings(); showToast(out.message);
+    });
+
     $$('[data-nav]').forEach(el => el.addEventListener('click', () => navTo(el.dataset.nav)));
 
     $('#startWorkoutHome').addEventListener('click', async () => {
@@ -2779,15 +2805,19 @@
     $('#redoOnboarding')?.addEventListener('click', async () => {
       const ok = await askConfirm({
         title: '¿Rehacer el onboarding?',
-        body: 'Se borra el plan y el historial de este dispositivo. Exportá antes si querés conservarlos.',
-        ok: 'Empezar de nuevo',
-        cancel: 'Cancelar',
-        danger: true
+        body: 'Podés corregir tus respuestas. Regeneraremos solo las sesiones futuras y conservaremos tus entrenamientos e intentos.',
+        ok: 'Corregir respuestas',
+        cancel: 'Cancelar'
       });
       if (!ok) return;
-      const out = Coach().resetToOnboarding();
-      plan = out.plan;
-      logs = out.logs;
+      // Completed sessions and attempts are retained by applyIntake.
+      const intake = plan.intake || {};
+      for (const [name, value] of [['onboardAbility', intake.continuousAbility], ['onboardGoal', intake.goalType], ['onboardDays', intake.sessionsPerWeek], ['onboardEnv', intake.environment]]) {
+        const input = document.querySelector(`input[name="${name}"][value="${value}"]`); if (input) input.checked = true;
+      }
+      $('#onboardActivity').value = intake.recentActivity || 'unknown';
+      $('#onboardWalk').value = intake.walkTolerance || 'unknown';
+      $('#onboardMinutes').value = String(intake.availableMinutes || 30);
       reloadWorkoutFromPlan();
       setupDates();
       renderSettings();
@@ -2795,33 +2825,17 @@
       renderHome();
       openOnboarding();
     });
-    $('#loadDemoData')?.addEventListener('click', async () => {
-      const ok = await askConfirm({
-        title: '¿Cargar datos de demo?',
-        body: 'Reemplaza tu plan e historial actuales por un ejemplo de la semana 2.',
-        ok: 'Cargar demo',
-        cancel: 'Cancelar',
-        danger: true
-      });
-      if (!ok) return;
-      const out = Coach().loadDemoData(settings);
-      plan = out.plan;
-      logs = out.logs;
-      reloadWorkoutFromPlan();
-      setupDates();
-      renderSettings();
-      renderHistory();
-      renderHome();
-      showToast('Demo cargada');
-      navTo('home');
-    });
     $('#goalDetailToggle').addEventListener('click', () => {
       const detail = $('#evidenceNeed');
       detail.hidden = !detail.hidden;
     });
-    $('#markRestPlan').addEventListener('click', () => {
+    $('#markRestPlan').addEventListener('click', async () => {
       const focus = Coach().getFocusSession(plan);
       if (!focus || focus.kind !== 'rest') return;
+      if (focus.gateForId) {
+        const ready = await askConfirm({ title: 'Antes de retomar', body: '¿La molestia ya no limita tu actividad y no hay síntomas que empeoren o alteren tu marcha? Si sigue limitándote, mantené la pausa y consultá a un profesional.', ok: 'Ya no me limita', cancel: 'Mantener la pausa' });
+        if (!ready) return;
+      }
       const result = Coach().markRestComplete(plan, logs, focus.id, localDateISO());
       plan = result.plan;
       logs = result.logs;
@@ -2947,6 +2961,15 @@
       });
     }
 
+    $('#onboardHasRace').addEventListener('change', () => { $('#raceDateWrap').hidden = !$('#onboardHasRace').checked; });
+    ['onboardAssessment', 'onboardActivity', 'onboardWalk', 'onboardMinutes'].forEach(id => $('#' + id).addEventListener('change', updateOnboardingPreview));
+    $('#walkNow').addEventListener('click', () => {
+      const b = workout[currentBlockIndex];
+      if (!hasStarted || b?.type !== 'run') { showToast('Ya estás en una fase de caminata.'); return; }
+      workoutRuntime.convertToWalk(Date.now()); applyRuntimeState(); persistActiveWorkout(true);
+      speak('Pasamos a caminar. Guardaremos lo realizado.'); updateTimerUI();
+    });
+    $('#stopNow').addEventListener('click', () => { noteRunProgressOnLeave(); pauseTimer(); openCloseDialogFromTimer(); });
     $('#mainTimerButton').addEventListener('click', () => startTimer());
     $('#nextBlockButton').addEventListener('click', nextBlock);
     $('#prevBlock').addEventListener('click', prevBlock);
@@ -3013,7 +3036,7 @@
       window.PaceProduct.track('legal_accepted');
       if (Coach().needsOnboarding(plan)) openOnboarding();
     });
-    $('#editLogForm')?.addEventListener('submit', (e) => {
+    $('#editLogForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = $('#editLogId').value;
       const time = normalizeTimeField($('#editLogTime').value);
@@ -3041,16 +3064,19 @@
         rpe,
         notes,
         paceMetrics
-      });
+      }, { plan, settings });
       if (!out.ok) {
-        showToast('No se pudo editar');
+        showToast(out.error || 'No se pudo editar');
         return;
       }
       logs = out.logs;
+      if (out.plan) plan = out.plan;
+      await window.PaceCloud?.whenDurable?.();
+      renderHome(); renderSettings();
       $('#editLogDialog')?.close();
       renderHistory();
       window.PaceProduct?.track?.('log_edited');
-      showToast('Sesión corregida');
+      showToast(out.review?.changed ? 'Sesión corregida. Revisamos solo los entrenamientos futuros; la decisión original queda auditada.' : 'Sesión corregida; conservamos la decisión original.');
     });
     $('#restoreFile').addEventListener('change', () => {
       const file = $('#restoreFile').files?.[0];
@@ -3122,12 +3148,15 @@
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (refreshing) return;
         refreshing = true;
+        if (hasStarted) { persistActiveWorkout(true); showToast('Hay una actualización lista. Se aplicará cuando cierres el entrenamiento.'); return; }
         window.location.reload();
       });
     } catch { /* */ }
   }
 
-  function init() {
+  async function init() {
+    if (window.PaceCloud && !await window.PaceCloud.boot()) return;
+    settings = loadSettings();
     if (!window.PaceCoach) {
       console.error('PaceCoach no cargó');
       return;
@@ -3150,9 +3179,8 @@
         );
       }, 600);
     }
-    workout = buildWorkout();
-    remainingMs = (workout[0]?.seconds || 60) * 1000;
-    originalBlockMs = remainingMs;
+    workoutRuntime = new window.WorkoutRuntime(buildWorkout());
+    applyRuntimeState();
     setupDates();
     renderSettings();
     renderWorkout();
@@ -3160,6 +3188,11 @@
     renderHome();
     updateTimerUI();
     initEvents();
+    if (!Coach().needsOnboarding(plan) && !window.PaceProduct?.needsLegalAcceptance?.(account)) {
+      $('#startWorkoutHome').disabled = true;
+      await restoreActiveWorkout();
+      $('#startWorkoutHome').disabled = false;
+    }
     registerServiceWorker();
     window.PaceProduct?.track?.('app_open');
     window.PaceProduct?.maybeNotifyTodaySession?.(plan, account);
@@ -3171,6 +3204,7 @@
         return;
       }
       if (Coach().needsOnboarding(plan)) openOnboarding();
+      else restoreActiveWorkout();
     }, 200);
   }
 
